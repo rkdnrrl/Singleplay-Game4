@@ -56,7 +56,7 @@ let raycaster = new THREE.Raycaster();
 let pointer = new THREE.Vector2();
 
 let scene, camera, renderer, controls;
-let floorMesh, wallGroup;
+let floorMesh;
 
 function loadJson(key, fallback) {
   try {
@@ -528,50 +528,6 @@ function initThree() {
   });
   grid.position.y = 0.002;
   scene.add(grid);
-
-  wallGroup = new THREE.Group();
-  const wallMat = new THREE.MeshStandardMaterial({
-    color: 0xf3eee6,
-    side: THREE.DoubleSide,
-    roughness: 0.92,
-    metalness: 0,
-  });
-  const wallH = 3.2;
-  const back = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_HALF * 2.2, wallH), wallMat);
-  back.position.set(0, wallH / 2, -ROOM_HALF);
-  back.receiveShadow = true;
-  wallGroup.add(back);
-  const left = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_HALF * 2.2, wallH), wallMat);
-  left.rotation.y = Math.PI / 2;
-  left.position.set(-ROOM_HALF, wallH / 2, 0);
-  left.receiveShadow = true;
-  wallGroup.add(left);
-
-  const trimMat = new THREE.MeshStandardMaterial({
-    color: 0x5d4a42,
-    roughness: 0.75,
-    metalness: 0.05,
-  });
-  const trimH = 0.11;
-  const trimT = 0.05;
-  const backTrim = new THREE.Mesh(
-    new THREE.BoxGeometry(ROOM_HALF * 2.2 + trimT, trimH, trimT),
-    trimMat
-  );
-  backTrim.position.set(0, trimH / 2, -ROOM_HALF + trimT / 2);
-  backTrim.castShadow = true;
-  backTrim.receiveShadow = true;
-  wallGroup.add(backTrim);
-  const leftTrim = new THREE.Mesh(
-    new THREE.BoxGeometry(trimT, trimH, ROOM_HALF * 2.2 + trimT),
-    trimMat
-  );
-  leftTrim.position.set(-ROOM_HALF + trimT / 2, trimH / 2, 0);
-  leftTrim.castShadow = true;
-  leftTrim.receiveShadow = true;
-  wallGroup.add(leftTrim);
-
-  scene.add(wallGroup);
 
   function resize() {
     const w = roomHost.clientWidth;
