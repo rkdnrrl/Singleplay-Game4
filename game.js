@@ -55,6 +55,8 @@ let isLoggedIn      = false;
 let serverCoins     = 0;
 let selectedPlaceId = null;   // DB id 또는 게스트 placeId
 let selectedCatalogId = null;
+/** 바닥 타일 칸 선택 (치우기용) */
+let selectedFloorCell = null; // { gx, gz } | null
 let lastDragEndTime = 0;
 
 /* ── DB 가구 상태 (로그인 시) ───────────────────────────── */
@@ -202,6 +204,36 @@ function canPlaceFloorAt(gx, gz) {
   const cells = effectiveFloorCells();
   if (cells.some((c) => c.gx === gx && c.gz === gz)) return false;
   return cells.some((c) => Math.abs(c.gx - gx) + Math.abs(c.gz - gz) === 1);
+}
+
+function isFloorCellsConnected(cells) {
+  if (cells.length <= 1) return true;
+  const keySet = new Set(cells.map((c) => `${c.gx},${c.gz}`));
+  const start = cells[0];
+  const seen = new Set([`${start.gx},${start.gz}`]);
+  const q = [start];
+  while (q.length) {
+    const c = q.shift();
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const gx = c.gx + dx;
+      const gz = c.gz + dz;
+      const k = `${gx},${gz}`;
+      if (keySet.has(k) && !seen.has(k)) {
+        seen.add(k);
+        q.push({ gx, gz });
+      }
+    }
+  }
+  return seen.size === cells.length;
+}
+
+function hasFurnitureOnCell(gx, gz) {
+  const placed = isLoggedIn ? getDbPlaced() : getGuestPlaced();
+  for (const p of placed) {
+    const w = worldToNearestCell(p.x, p.z);
+    if (w.gx === gx && w.gz === gz) return true;
+  }
+  return false;
 }
 
 function getGuestWallet() {
@@ -387,6 +419,29 @@ function setGroupFromRecord(group, p) {
   group.rotation.y = typeof p.ry === 'number' ? p.ry : 0;
 }
 
+function highlightFloorSelection() {
+  if (!floorGroup) return;
+  if (
+    selectedFloorCell &&
+    !effectiveFloorCells().some(
+      (c) => c.gx === selectedFloorCell.gx && c.gz === selectedFloorCell.gz
+    )
+  ) {
+    selectedFloorCell = null;
+  }
+  floorGroup.children.forEach((ch) => {
+    if (!ch.userData?.isFloorTile || !ch.material) return;
+    const sel =
+      selectedFloorCell &&
+      ch.userData.floorGx === selectedFloorCell.gx &&
+      ch.userData.floorGz === selectedFloorCell.gz;
+    if (ch.material.emissive) {
+      ch.material.emissive.setHex(sel ? 0x334466 : 0x000000);
+      ch.material.emissiveIntensity = sel ? 0.45 : 0;
+    }
+  });
+}
+
 function highlightSelection() {
   furnitureMap.forEach((group, id) => {
     const sel = id === selectedPlaceId;
@@ -401,7 +456,8 @@ function highlightSelection() {
       });
     });
   });
-  btnRemoveSelected.disabled = !selectedPlaceId;
+  highlightFloorSelection();
+  btnRemoveSelected.disabled = !selectedPlaceId && !selectedFloorCell;
 }
 
 function syncSceneFromData() {
@@ -470,6 +526,7 @@ function renderInventory() {
     chip.addEventListener('click', () => {
       selectedCatalogId = selectedCatalogId === 'floor_tile' ? null : 'floor_tile';
       selectedPlaceId = null;
+      selectedFloorCell = null;
       renderInventory();
       updatePlaceHint();
       highlightSelection();
@@ -486,6 +543,7 @@ function renderInventory() {
     chip.addEventListener('click', () => {
       selectedCatalogId = selectedCatalogId === item.id ? null : item.id;
       selectedPlaceId = null;
+      selectedFloorCell = null;
       renderInventory();
       updatePlaceHint();
       highlightSelection();
@@ -512,7 +570,8 @@ function updatePlaceHint() {
     const it = catalogById[selectedCatalogId];
     placeHint.textContent = `「${it.name}」 배치 — 바닥을 클릭하세요. (시점 돌리기는 상단 버튼)`;
   } else {
-    placeHint.textContent = '「내 가구」에서 가구를 선택하거나, 배치된 가구를 클릭해 선택하세요.';
+    placeHint.textContent =
+      '「내 가구」에서 가구·바닥 타일을 선택하거나, 배치된 가구를 클릭해 선택하세요. 바닥 칸을 클릭하면 타일만 선택되어 치울 수 있습니다.';
   }
 }
 
@@ -704,8 +763,73 @@ async function saveDraggedPosition(placeId, x, z) {
   } catch {}
 }
 
-/* ── 치우기 (방 → 내 가구) ──────────────────────────────── */
+/* ── 바닥 타일 치우기 (→ 미배치 타일) ───────────────────── */
+async function tryRemoveFloorCell(gx, gz) {
+  const cells = effectiveFloorCells();
+  if (cells.length <= 1) {
+    alert('마지막 바닥 칸은 치울 수 없습니다.');
+    return;
+  }
+  if (!cells.some((c) => c.gx === gx && c.gz === gz)) return;
+
+  const next = cells.filter((c) => !(c.gx === gx && c.gz === gz));
+  if (!isFloorCellsConnected(next)) {
+    alert('바닥이 한 덩어리가 되도록 유지해야 합니다. 다른 칸을 먼저 치우세요.');
+    return;
+  }
+  if (hasFurnitureOnCell(gx, gz)) {
+    alert('그 칸 위에 가구가 있으면 바닥을 치울 수 없습니다.');
+    return;
+  }
+
+  if (!isLoggedIn) {
+    setFloorCells(next);
+    setFloorUnplaced(getFloorUnplaced() + 1);
+    selectedFloorCell = null;
+    rebuildFloorScene();
+    syncSceneFromData();
+    renderInventory();
+    updatePlaceHint();
+    highlightSelection();
+    return;
+  }
+
+  const item = dbItems.find(
+    (i) =>
+      i.catId === 'floor_tile' &&
+      i.placed &&
+      Math.round(i.posX ?? 0) === gx &&
+      Math.round(i.posZ ?? 0) === gz
+  );
+  if (!item) {
+    alert('이 바닥 칸은 서버에 저장된 타일이 아니어서 치울 수 없습니다.');
+    return;
+  }
+
+  try {
+    const r = await fetch(`${platformApi}/api/furniture/${item.id}/remove`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${alpToken}` },
+    });
+    if (!r.ok) return;
+    const data = await r.json();
+    const idx = dbItems.findIndex((i) => i.id === item.id);
+    if (idx >= 0) dbItems[idx] = data.item;
+    selectedFloorCell = null;
+    rebuildFloorScene();
+    syncSceneFromData();
+    renderInventory();
+    updatePlaceHint();
+    highlightSelection();
+  } catch {}
+}
+
+/* ── 치우기 (방 → 내 가구 / 바닥 타일) ──────────────────── */
 btnRemoveSelected.addEventListener('click', async () => {
+  if (selectedFloorCell) {
+    await tryRemoveFloorCell(selectedFloorCell.gx, selectedFloorCell.gz);
+    return;
+  }
   if (!selectedPlaceId) return;
 
   if (!isLoggedIn) {
@@ -768,6 +892,7 @@ function rebuildFloorScene() {
   while (floorGroup.children.length > 0) {
     const ch = floorGroup.children[0];
     ch.geometry?.dispose();
+    if (ch.material && ch.material !== sharedFloorMaterial) ch.material.dispose();
     floorGroup.remove(ch);
   }
   if (!sharedFloorMaterial) {
@@ -780,16 +905,17 @@ function rebuildFloorScene() {
     });
   }
   for (const c of effectiveFloorCells()) {
-    const mesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(TILE_WORLD, TILE_WORLD),
-      sharedFloorMaterial
-    );
+    const mat = sharedFloorMaterial.clone();
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(TILE_WORLD, TILE_WORLD), mat);
     mesh.rotation.x = -Math.PI / 2;
     mesh.position.set(c.gx * TILE_WORLD, 0, c.gz * TILE_WORLD);
     mesh.receiveShadow = true;
     mesh.userData.isFloorTile = true;
+    mesh.userData.floorGx = c.gx;
+    mesh.userData.floorGz = c.gz;
     floorGroup.add(mesh);
   }
+  highlightFloorSelection();
 
   if (floorGridHelper) {
     scene.remove(floorGridHelper);
@@ -826,6 +952,7 @@ function onPointerDown(ev) {
     dragTarget = root;
     selectedPlaceId = root.userData.placeId;
     selectedCatalogId = null;
+    selectedFloorCell = null;
     renderInventory();
     updatePlaceHint();
     highlightSelection();
@@ -840,7 +967,21 @@ function onPointerDown(ev) {
   }
   selectedPlaceId = null;
   highlightSelection();
-  if (!selectedCatalogId) return;
+  if (!selectedCatalogId) {
+    const floorPick = intersects.find((h) => h.object.userData?.isFloorTile);
+    if (floorPick && Number.isFinite(floorPick.object.userData.floorGx)) {
+      selectedFloorCell = {
+        gx: floorPick.object.userData.floorGx,
+        gz: floorPick.object.userData.floorGz,
+      };
+      highlightSelection();
+      ev.preventDefault();
+      return;
+    }
+    selectedFloorCell = null;
+    highlightSelection();
+    return;
+  }
   const floorHit = intersects.find((h) => h.object.userData?.isFloorTile);
   if (floorHit) {
     placeAtWorld(floorHit.point.x, floorHit.point.z);
@@ -948,7 +1089,13 @@ btnOrbit.addEventListener('click', () => {
   btnOrbit.textContent = on ? '시점 조작 끄기 (가구 배치)' : '시점 조작 켜기 (회전·확대)';
   btnOrbit.setAttribute('aria-pressed', on ? 'true' : 'false');
   roomHost.classList.toggle('orbit-mode', on);
-  if (on) { selectedCatalogId = null; renderInventory(); updatePlaceHint(); }
+  if (on) {
+    selectedCatalogId = null;
+    selectedFloorCell = null;
+    renderInventory();
+    updatePlaceHint();
+    highlightSelection();
+  }
 });
 roomHost.parentElement.insertBefore(btnOrbit, placeHint);
 
