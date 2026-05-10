@@ -46,11 +46,37 @@ const btnRemoveSelected = document.getElementById('btnRemoveSelected');
 const shopPanel         = document.getElementById('shopPanel');
 const invPanel          = document.getElementById('invPanel');
 
-let selectedPlaceId   = null;
+/* ── 플랫폼 연동 ──────────────────────────────────────── */
+const urlParams   = new URLSearchParams(window.location.search);
+const alpToken    = urlParams.get('token');
+const platformApi = window.__ALP_PLATFORM_API__ || '';
+
+let isLoggedIn      = false;
+let serverCoins     = 0;
+let selectedPlaceId = null;   // DB id 또는 게스트 placeId
 let selectedCatalogId = null;
 /** 바닥 타일 칸 선택 (치우기용) */
 let selectedFloorCell = null; // { gx, gz } | null
-let lastDragEndTime   = 0;
+let lastDragEndTime = 0;
+
+/* ── DB 가구 상태 (로그인 시) ───────────────────────────── */
+// [{ id, catId, placed, posX, posZ, rotY, purchasedAt }]
+let dbItems = [];
+
+function getDbInventory() {
+  const inv = {};
+  dbItems.filter(i => !i.placed).forEach(i => {
+    inv[i.catId] = (inv[i.catId] || 0) + 1;
+  });
+  return inv;
+}
+
+function getDbPlaced() {
+  return dbItems.filter(i => i.placed).map(i => ({
+    id: i.id, catId: i.catId,
+    x: i.posX ?? 0, z: i.posZ ?? 0, ry: i.rotY ?? 0,
+  }));
+}
 
 /* ── 게스트 localStorage 헬퍼 ──────────────────────────── */
 function loadJson(key, fallback) {
@@ -156,11 +182,21 @@ function worldToNearestCell(x, z) {
   return { gx: Math.round(x / TILE_WORLD), gz: Math.round(z / TILE_WORLD) };
 }
 
+/* ── 로그인 여부에 따라 DB or localStorage에서 타일 정보 반환 ── */
 function effectiveFloorCells() {
+  if (isLoggedIn) {
+    const cells = dbItems
+      .filter((i) => i.catId === 'floor_tile' && i.placed)
+      .map((i) => ({ gx: Math.round(i.posX || 0), gz: Math.round(i.posZ || 0) }));
+    return cells.length > 0 ? cells : [{ gx: 0, gz: 0 }];
+  }
   return getFloorCells();
 }
 
 function effectiveFloorUnplaced() {
+  if (isLoggedIn) {
+    return dbItems.filter((i) => i.catId === 'floor_tile' && !i.placed).length;
+  }
   return getFloorUnplaced();
 }
 
@@ -192,7 +228,8 @@ function isFloorCellsConnected(cells) {
 }
 
 function hasFurnitureOnCell(gx, gz) {
-  for (const p of getGuestPlaced()) {
+  const placed = isLoggedIn ? getDbPlaced() : getGuestPlaced();
+  for (const p of placed) {
     const w = worldToNearestCell(p.x, p.z);
     if (w.gx === gx && w.gz === gz) return true;
   }
@@ -212,11 +249,65 @@ function setGuestWallet(n) {
 }
 
 /* ── 코인 UI ────────────────────────────────────────────── */
+function getDisplayBalance() {
+  return isLoggedIn ? Math.max(0, serverCoins) : getGuestWallet();
+}
+
 function refreshCoinUi() {
-  const bal = getGuestWallet();
+  const bal = getDisplayBalance();
   if (coinDisplay) coinDisplay.textContent = bal.toLocaleString();
-  if (serverCoinDisplay) serverCoinDisplay.textContent = '—';
-  if (coinHint) coinHint.textContent = '코인은 이 브라우저에만 저장됩니다.';
+  if (serverCoinDisplay) serverCoinDisplay.textContent = isLoggedIn ? bal.toLocaleString() : '—';
+  if (coinHint) {
+    coinHint.textContent = isLoggedIn
+      ? ''
+      : '게스트: 코인은 이 브라우저에만 저장됩니다.';
+  }
+}
+
+/* ── 서버 초기화 ─────────────────────────────────────────── */
+async function initFromServer() {
+  if (!alpToken || !platformApi) {
+    isLoggedIn = false;
+    refreshCoinUi();
+    renderShop();
+    return;
+  }
+
+  try {
+    const r = await fetch(`${platformApi}/api/auth/me`, {
+      headers: { Authorization: `Bearer ${alpToken}` },
+    });
+    const data = r.ok ? await r.json() : null;
+    if (data?.user && typeof data.user.coins === 'number') {
+      isLoggedIn = true;
+      serverCoins = data.user.coins;
+    } else {
+      isLoggedIn = false;
+    }
+  } catch {
+    isLoggedIn = false;
+  }
+
+  refreshCoinUi();
+  renderShop();
+
+  if (!isLoggedIn) {
+    if (loginOverlay) loginOverlay.classList.remove('hidden');
+    return;
+  }
+
+  // 가구 데이터 로드
+  try {
+    const r = await fetch(`${platformApi}/api/furniture`, {
+      headers: { Authorization: `Bearer ${alpToken}` },
+    });
+    if (!r.ok) return;
+    const data = await r.json();
+    dbItems = Array.isArray(data.items) ? data.items : [];
+    syncSceneFromData();
+    renderInventory();
+    rebuildFloorScene();
+  } catch {}
 }
 
 /* ── Three.js 씬 ─────────────────────────────────────────── */
@@ -369,7 +460,7 @@ function highlightSelection() {
 }
 
 function syncSceneFromData() {
-  const placed = getGuestPlaced();
+  const placed = isLoggedIn ? getDbPlaced() : getGuestPlaced();
   const ids = new Set(placed.map((p) => p.id));
 
   furnitureMap.forEach((group, id) => {
@@ -424,7 +515,7 @@ function renderShop() {
 
 function renderInventory() {
   invList.innerHTML = '';
-  const inv = getGuestInventory();
+  const inv = isLoggedIn ? getDbInventory() : getGuestInventory();
   const ft = effectiveFloorUnplaced();
   if (ft > 0) {
     const chip = document.createElement('button');
@@ -484,76 +575,181 @@ function updatePlaceHint() {
 }
 
 /* ── 구매 ────────────────────────────────────────────────── */
-function buyItem(catId) {
+async function buyItem(catId) {
   const item = catalogById[catId];
   if (!item) return;
-  if (getGuestWallet() < item.price) { alert('코인이 부족합니다.'); return; }
-  setGuestWallet(getGuestWallet() - item.price);
+
   if (catId === 'floor_tile') {
-    setFloorUnplaced(getFloorUnplaced() + 1);
-  } else {
+    if (!isLoggedIn) {
+      if (getGuestWallet() < item.price) { alert('코인이 부족합니다.'); return; }
+      setGuestWallet(getGuestWallet() - item.price);
+      setFloorUnplaced(getFloorUnplaced() + 1);
+      refreshCoinUi();
+      renderShop();
+      renderInventory();
+      return;
+    }
+    try {
+      const r = await fetch(`${platformApi}/api/furniture/buy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${alpToken}` },
+        body: JSON.stringify({ catId: 'floor_tile' }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { alert(data?.error?.message || '구매에 실패했습니다.'); return; }
+      if (typeof data.coins === 'number') serverCoins = data.coins;
+      if (data.item) dbItems.push(data.item);
+      refreshCoinUi();
+      renderShop();
+      renderInventory();
+    } catch { alert('서버 오류가 발생했습니다.'); }
+    return;
+  }
+
+  if (!isLoggedIn) {
+    if (getGuestWallet() < item.price) { alert('코인이 부족합니다.'); return; }
+    setGuestWallet(getGuestWallet() - item.price);
     const inv = getGuestInventory();
     inv[catId] = (inv[catId] || 0) + 1;
     setGuestInventory(inv);
+    refreshCoinUi();
+    renderShop();
+    renderInventory();
+    return;
   }
-  refreshCoinUi();
-  renderShop();
-  renderInventory();
+
+  // 로그인 — API
+  try {
+    const r = await fetch(`${platformApi}/api/furniture/buy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${alpToken}` },
+      body: JSON.stringify({ catId }),
+    });
+    const data = await r.json();
+    if (!r.ok) { alert(data?.error?.message || '구매에 실패했습니다.'); return; }
+    dbItems.push(data.item);
+    serverCoins = data.coins;
+    refreshCoinUi();
+    renderShop();
+    renderInventory();
+  } catch { alert('서버 오류가 발생했습니다.'); }
 }
 
 /* ── 배치 ────────────────────────────────────────────────── */
-function tryPlaceFloorTile(x, z) {
+async function tryPlaceFloorTile(x, z) {
   if (effectiveFloorUnplaced() <= 0) return;
   const { gx, gz } = worldToNearestCell(x, z);
   if (!canPlaceFloorAt(gx, gz)) {
     alert('이미 바닥이 있거나, 기존 바닥과 옆면이 맞닿는 칸에만 늘릴 수 있습니다.');
     return;
   }
-  setFloorUnplaced(getFloorUnplaced() - 1);
-  setFloorCells([...getFloorCells(), { gx, gz }]);
-  rebuildFloorScene();
-  selectedCatalogId = null;
-  renderInventory();
-  updatePlaceHint();
-  renderShop();
-}
 
-function placeAtWorld(x, z) {
-  if (!selectedCatalogId) return;
-
-  if (selectedCatalogId === 'floor_tile') {
-    tryPlaceFloorTile(x, z);
+  if (!isLoggedIn) {
+    setFloorUnplaced(getFloorUnplaced() - 1);
+    setFloorCells([...getFloorCells(), { gx, gz }]);
+    rebuildFloorScene();
+    selectedCatalogId = null;
+    renderInventory();
+    updatePlaceHint();
+    renderShop();
     return;
   }
 
-  const inv = getGuestInventory();
-  if ((inv[selectedCatalogId] || 0) <= 0) return;
-  inv[selectedCatalogId] -= 1;
-  if (inv[selectedCatalogId] <= 0) delete inv[selectedCatalogId];
-  setGuestInventory(inv);
+  const unplaced = dbItems.find((i) => i.catId === 'floor_tile' && !i.placed);
+  if (!unplaced) return;
+  try {
+    const r = await fetch(`${platformApi}/api/furniture/${unplaced.id}/place`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${alpToken}` },
+      body: JSON.stringify({ posX: gx, posZ: gz, rotY: 0 }),
+    });
+    if (!r.ok) return;
+    const data = await r.json();
+    const idx = dbItems.findIndex((i) => i.id === unplaced.id);
+    if (idx >= 0) dbItems[idx] = data.item;
+    rebuildFloorScene();
+    selectedCatalogId = null;
+    renderInventory();
+    updatePlaceHint();
+    renderShop();
+  } catch {}
+}
+
+async function placeAtWorld(x, z) {
+  if (!selectedCatalogId) return;
+
+  if (selectedCatalogId === 'floor_tile') {
+    await tryPlaceFloorTile(x, z);
+    return;
+  }
+
   const c = clampToRoom(x, z);
-  const id = `p_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const placed = getGuestPlaced();
-  placed.push({ id, catId: selectedCatalogId, x: c.x, z: c.z, ry: 0 });
-  setGuestPlaced(placed);
-  selectedCatalogId = null;
-  renderInventory();
-  syncSceneFromData();
-  updatePlaceHint();
-  renderShop();
+
+  if (!isLoggedIn) {
+    const inv = getGuestInventory();
+    if ((inv[selectedCatalogId] || 0) <= 0) return;
+    inv[selectedCatalogId] -= 1;
+    if (inv[selectedCatalogId] <= 0) delete inv[selectedCatalogId];
+    setGuestInventory(inv);
+    const id = `p_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const placed = getGuestPlaced();
+    placed.push({ id, catId: selectedCatalogId, x: c.x, z: c.z, ry: 0 });
+    setGuestPlaced(placed);
+    selectedCatalogId = null;
+    renderInventory();
+    syncSceneFromData();
+    updatePlaceHint();
+    renderShop();
+    return;
+  }
+
+  const unplaced = dbItems.find(i => i.catId === selectedCatalogId && !i.placed);
+  if (!unplaced) return;
+  try {
+    const r = await fetch(`${platformApi}/api/furniture/${unplaced.id}/place`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${alpToken}` },
+      body: JSON.stringify({ posX: c.x, posZ: c.z, rotY: 0 }),
+    });
+    if (!r.ok) return;
+    const data = await r.json();
+    const idx = dbItems.findIndex(i => i.id === unplaced.id);
+    if (idx >= 0) dbItems[idx] = data.item;
+    selectedCatalogId = null;
+    renderInventory();
+    syncSceneFromData();
+    updatePlaceHint();
+    renderShop();
+  } catch {}
 }
 
 /* ── 드래그 위치 저장 ────────────────────────────────────── */
-function saveDraggedPosition(placeId, x, z) {
+async function saveDraggedPosition(placeId, x, z) {
   const c = clampToRoom(x, z);
-  const placed = getGuestPlaced();
-  const idx = placed.findIndex(p => p.id === placeId);
-  if (idx >= 0) { placed[idx].x = c.x; placed[idx].z = c.z; }
-  setGuestPlaced(placed);
+
+  if (!isLoggedIn) {
+    const placed = getGuestPlaced();
+    const idx = placed.findIndex(p => p.id === placeId);
+    if (idx >= 0) { placed[idx].x = c.x; placed[idx].z = c.z; }
+    setGuestPlaced(placed);
+    return;
+  }
+
+  try {
+    const r = await fetch(`${platformApi}/api/furniture/${placeId}/move`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${alpToken}` },
+      body: JSON.stringify({ posX: c.x, posZ: c.z }),
+    });
+    if (!r.ok) return;
+    const data = await r.json();
+    const idx = dbItems.findIndex(i => i.id === placeId);
+    if (idx >= 0) dbItems[idx] = data.item;
+  } catch {}
 }
 
 /* ── 바닥 타일 치우기 (→ 미배치 타일) ───────────────────── */
-function tryRemoveFloorCell(gx, gz) {
+async function tryRemoveFloorCell(gx, gz) {
   const cells = effectiveFloorCells();
   if (cells.length <= 1) {
     alert('마지막 바닥 칸은 치울 수 없습니다.');
@@ -571,36 +767,81 @@ function tryRemoveFloorCell(gx, gz) {
     return;
   }
 
-  setFloorCells(next);
-  setFloorUnplaced(getFloorUnplaced() + 1);
-  selectedFloorCell = null;
-  rebuildFloorScene();
-  syncSceneFromData();
-  renderInventory();
-  updatePlaceHint();
-  highlightSelection();
+  if (!isLoggedIn) {
+    setFloorCells(next);
+    setFloorUnplaced(getFloorUnplaced() + 1);
+    selectedFloorCell = null;
+    rebuildFloorScene();
+    syncSceneFromData();
+    renderInventory();
+    updatePlaceHint();
+    highlightSelection();
+    return;
+  }
+
+  const item = dbItems.find(
+    (i) => i.catId === 'floor_tile' && i.placed &&
+      Math.round(i.posX ?? 0) === gx && Math.round(i.posZ ?? 0) === gz
+  );
+  if (!item) { alert('이 바닥 칸은 서버에 저장된 타일이 아니어서 치울 수 없습니다.'); return; }
+
+  try {
+    const r = await fetch(`${platformApi}/api/furniture/${item.id}/remove`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${alpToken}` },
+    });
+    if (!r.ok) return;
+    const data = await r.json();
+    const idx = dbItems.findIndex((i) => i.id === item.id);
+    if (idx >= 0) dbItems[idx] = data.item;
+    selectedFloorCell = null;
+    rebuildFloorScene();
+    syncSceneFromData();
+    renderInventory();
+    updatePlaceHint();
+    highlightSelection();
+  } catch {}
 }
 
 /* ── 치우기 (방 → 내 가구 / 바닥 타일) ──────────────────── */
-btnRemoveSelected.addEventListener('click', () => {
+btnRemoveSelected.addEventListener('click', async () => {
   if (selectedFloorCell) {
-    tryRemoveFloorCell(selectedFloorCell.gx, selectedFloorCell.gz);
+    await tryRemoveFloorCell(selectedFloorCell.gx, selectedFloorCell.gz);
     return;
   }
   if (!selectedPlaceId) return;
 
-  const placed = getGuestPlaced();
-  const removed = placed.find(p => p.id === selectedPlaceId);
-  if (removed) {
-    const inv = getGuestInventory();
-    inv[removed.catId] = (inv[removed.catId] || 0) + 1;
-    setGuestInventory(inv);
+  if (!isLoggedIn) {
+    const placed = getGuestPlaced();
+    const removed = placed.find(p => p.id === selectedPlaceId);
+    if (removed) {
+      const inv = getGuestInventory();
+      inv[removed.catId] = (inv[removed.catId] || 0) + 1;
+      setGuestInventory(inv);
+    }
+    setGuestPlaced(placed.filter(p => p.id !== selectedPlaceId));
+    selectedPlaceId = null;
+    syncSceneFromData();
+    renderInventory();
+    updatePlaceHint();
+    return;
   }
-  setGuestPlaced(placed.filter(p => p.id !== selectedPlaceId));
-  selectedPlaceId = null;
-  syncSceneFromData();
-  renderInventory();
-  updatePlaceHint();
+
+  const id = selectedPlaceId;
+  try {
+    const r = await fetch(`${platformApi}/api/furniture/${id}/remove`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${alpToken}` },
+    });
+    if (!r.ok) return;
+    const data = await r.json();
+    const idx = dbItems.findIndex(i => i.id === id);
+    if (idx >= 0) dbItems[idx] = data.item;
+    selectedPlaceId = null;
+    syncSceneFromData();
+    renderInventory();
+    updatePlaceHint();
+  } catch {}
 });
 
 /* ── Three.js 초기화 ─────────────────────────────────────── */
@@ -847,8 +1088,9 @@ document.querySelectorAll('.tab').forEach(tab => {
 
 /* ── 시작 ────────────────────────────────────────────────── */
 initThree();
-refreshCoinUi();
 renderShop();
 renderInventory();
 updatePlaceHint();
 animate();
+
+initFromServer();      // 비동기: 로그인 확인 후 DB 데이터 로드
