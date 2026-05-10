@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3D 인테리어 방 꾸미기</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&family=Jua&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="hud">
+      <div class="hud-block hud-wide">
+        <span class="hud-label">💰 사용 가능 코인</span>
+        <span id="coinDisplay" class="hud-value">—</span>
+        <p id="coinHint" class="hud-hint"></p>
+      </div>
+      <div class="hud-block hud-coin">
+        <span class="hud-label">🪙 서버 보유 (참고)</span>
+        <span id="serverCoinDisplay" class="hud-value coin-muted">—</span>
+      </div>
+    </header>
+
+    <p class="intro">
+      <strong>3D 방</strong> — 「시점 조작 켜기」를 누른 뒤 드래그·휠로 회전·확대합니다. 상점에서 구매 → 「내 가구」에서 선택 → <strong>바닥</strong> 클릭으로 배치. 가구를 클릭해 선택한 뒤 드래그로 옮깁니다.
+    </p>
+
+    <div class="layout">
+      <section class="room-wrap">
+        <h2 class="section-title">내 방 (3D)</h2>
+        <div class="room" id="roomHost" aria-label="3D 인테리어 뷰"></div>
+        <p class="place-hint" id="placeHint">배치할 가구를 아래에서 선택하세요.</p>
+        <button type="button" id="btnRemoveSelected" class="btn-remove" disabled>선택한 가구 치우기</button>
+      </section>
+
+      <aside class="panel">
+        <div class="tabs">
+          <button type="button" class="tab active" data-tab="shop">상점</button>
+          <button type="button" class="tab" data-tab="inv">내 가구</button>
+        </div>
+        <div id="shopPanel" class="tab-panel">
+          <h3 class="panel-title">가구 구매</h3>
+          <div id="shopList" class="shop-list"></div>
+        </div>
+        <div id="invPanel" class="tab-panel hidden">
+          <h3 class="panel-title">보유 가구 — 선택 후 바닥 클릭</h3>
+          <div id="invList" class="inv-list"></div>
+        </div>
+      </aside>
+    </div>
+  </div>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script src="config.js"></script>
+  <script type="module" src="game.js"></script>
+</body>
+</html>

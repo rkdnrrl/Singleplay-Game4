@@ -1,0 +1,3 @@
+Interior-Game (인테리어)
+- Game1 동일: config.js, /api/auth/me, 코인 표시
+- 구매: 플랫폼에 코인 차감 API가 없으면 로컬 지출 합계로 표시 잔액 관리
