@@ -571,18 +571,6 @@ function initThree() {
   leftTrim.receiveShadow = true;
   wallGroup.add(leftTrim);
 
-  const ceilMat = new THREE.MeshStandardMaterial({
-    color: 0xfaf8f4,
-    side: THREE.DoubleSide,
-    roughness: 1,
-    metalness: 0,
-  });
-  const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_HALF * 2.2, ROOM_HALF * 2.2), ceilMat);
-  ceiling.rotation.x = Math.PI / 2;
-  ceiling.position.set(0, wallH, 0);
-  ceiling.receiveShadow = true;
-  wallGroup.add(ceiling);
-
   scene.add(wallGroup);
 
   function resize() {
