@@ -405,3 +405,22 @@ body {
     0 20px 48px var(--shadow-deep),
     0 4px 12px var(--shadow);
 }
+
+
+/* 로그인 필요 오버레이 */
+.login-overlay {
+  position: fixed; inset: 0; z-index: 999;
+  background: rgba(235, 228, 216, 0.97);
+  display: flex; align-items: center; justify-content: center;
+}
+.login-overlay.hidden { display: none !important; }
+.login-box {
+  text-align: center; padding: 3rem 2.5rem;
+  background: #fff;
+  border-radius: 20px;
+  box-shadow: 0 8px 40px rgba(45,36,32,0.15);
+  max-width: 360px;
+}
+.login-icon { font-size: 3.5rem; margin-bottom: 1rem; }
+.login-box h2 { font-size: 1.4rem; margin-bottom: 0.6rem; color: var(--text); }
+.login-box p  { font-size: 0.9rem; color: #7a6a60; line-height: 1.6; }

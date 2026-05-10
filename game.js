@@ -27,6 +27,7 @@ const CATALOG = [
 const catalogById = Object.fromEntries(CATALOG.map((c) => [c.id, c]));
 
 /* ── DOM ───────────────────────────────────────────────── */
+const loginOverlay      = document.getElementById('loginOverlay');
 const roomHost          = document.getElementById('roomHost');
 const coinDisplay       = document.getElementById('coinDisplay');
 const serverCoinDisplay = document.getElementById('serverCoinDisplay');
@@ -166,7 +167,12 @@ async function initFromServer() {
 
   refreshCoinUi();
   renderShop();
-  if (!isLoggedIn) return;
+
+  if (!isLoggedIn) {
+    // 로그인 안 된 경우 오버레이 표시
+    if (loginOverlay) loginOverlay.classList.remove('hidden');
+    return;
+  }
 
   // 가구 데이터 로드
   try {
@@ -707,10 +713,9 @@ document.querySelectorAll('.tab').forEach(tab => {
 
 /* ── 시작 ────────────────────────────────────────────────── */
 initThree();
-syncSceneFromData();   // 게스트 localStorage 씬 초기 적용
 renderShop();
 renderInventory();
 updatePlaceHint();
 animate();
 
-initFromServer();      // 비동기: 로그인 확인 후 DB 데이터로 교체
+initFromServer();      // 비동기: 로그인 확인 후 DB 데이터 로드
