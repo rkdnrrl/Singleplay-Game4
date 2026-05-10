@@ -4,16 +4,22 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 
 /* ── 게스트 전용 localStorage 키 ─────────────────────────── */
 const LS = {
-  PLACED:       'sg4_placed_v2',
-  PLACED_LEGACY:'sg4_placed_v1',
-  INV:          'sg4_inv_v1',
-  GUEST_WALLET: 'sg4_guest_wallet_v1',
+  PLACED:        'sg4_placed_v2',
+  PLACED_LEGACY: 'sg4_placed_v1',
+  INV:           'sg4_inv_v1',
+  GUEST_WALLET:  'sg4_guest_wallet_v1',
+  FLOOR_CELLS:   'sg4_floor_cells_v1',
+  FLOOR_UNPLACED:'sg4_floor_unplaced_v1',
 };
 
 const GUEST_START_COINS = 1200;
+/** 레거시 배치 좌표 변환용 (옛 저장 데이터) */
 const ROOM_HALF = 3.6;
+/** 바닥 한 칸 너비(월드 단위). 타일 중심은 (gx * TILE_WORLD, gz * TILE_WORLD) */
+const TILE_WORLD = 2;
 
 const CATALOG = [
+  { id: 'floor_tile', name: '바닥 타일', price: 50, emoji: '⬜', isFloorTile: true },
   { id: 'sofa',  name: '소파',   price: 120, emoji: '🛋️',  w: 1.8,  d: 0.85, h: 0.7,  color: 0x6d4c41 },
   { id: 'plant', name: '화분',   price: 45,  emoji: '🪴',  w: 0.4,  d: 0.4,  h: 0.6,  color: 0x388e3c },
   { id: 'lamp',  name: '스탠드', price: 60,  emoji: '💡',  w: 0.28, d: 0.28, h: 1.45, color: 0xffb300 },
@@ -25,6 +31,7 @@ const CATALOG = [
 ];
 
 const catalogById = Object.fromEntries(CATALOG.map((c) => [c.id, c]));
+const FURNITURE_CATALOG = CATALOG.filter((c) => !c.isFloorTile);
 
 /* ── DOM ───────────────────────────────────────────────── */
 const loginOverlay      = document.getElementById('loginOverlay');
@@ -93,10 +100,11 @@ function migrateLegacyPlaced(arr) {
   if (first && typeof first.z === 'number') return arr;
   if (first && typeof first.x === 'number') {
     const scale = ROOM_HALF * 1.8;
+    const m = TILE_WORLD / 2 - 0.2;
     return arr.map((p) => ({
       id: p.id, catId: p.catId,
-      x: Math.max(-ROOM_HALF, Math.min(ROOM_HALF, ((p.x / 100) - 0.5) * scale)),
-      z: Math.max(-ROOM_HALF, Math.min(ROOM_HALF, ((0.5 - p.y / 100) * scale))),
+      x: Math.max(-m, Math.min(m, ((p.x / 100) - 0.5) * scale)),
+      z: Math.max(-m, Math.min(m, ((0.5 - p.y / 100) * scale))),
       ry: typeof p.ry === 'number' ? p.ry : 0,
     }));
   }
@@ -112,6 +120,89 @@ function getGuestPlaced() {
   return Array.isArray(arr) ? arr : [];
 }
 function setGuestPlaced(arr) { saveJson(LS.PLACED, arr); }
+
+function getFloorCells() {
+  const raw = loadJson(LS.FLOOR_CELLS, null);
+  if (Array.isArray(raw) && raw.length > 0) {
+    return raw
+      .filter((c) => Number.isFinite(c.gx) && Number.isFinite(c.gz))
+      .map((c) => ({ gx: c.gx | 0, gz: c.gz | 0 }));
+  }
+  return [{ gx: 0, gz: 0 }];
+}
+
+function setFloorCells(cells) {
+  const seen = new Set();
+  const uniq = [];
+  for (const c of cells) {
+    const gx = c.gx | 0;
+    const gz = c.gz | 0;
+    const k = `${gx},${gz}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    uniq.push({ gx, gz });
+  }
+  saveJson(LS.FLOOR_CELLS, uniq);
+}
+
+function getFloorUnplaced() {
+  const n = Number(localStorage.getItem(LS.FLOOR_UNPLACED));
+  return Number.isFinite(n) && n > 0 ? n | 0 : 0;
+}
+
+function setFloorUnplaced(n) {
+  localStorage.setItem(LS.FLOOR_UNPLACED, String(Math.max(0, n | 0)));
+}
+
+function getFloorBounds() {
+  const cells = effectiveFloorCells();
+  let mgx = Infinity;
+  let Mgx = -Infinity;
+  let mgz = Infinity;
+  let Mgz = -Infinity;
+  for (const c of cells) {
+    mgx = Math.min(mgx, c.gx);
+    Mgx = Math.max(Mgx, c.gx);
+    mgz = Math.min(mgz, c.gz);
+    Mgz = Math.max(Mgz, c.gz);
+  }
+  if (!Number.isFinite(mgx)) {
+    return { cx: 0, cz: 0, sizeX: TILE_WORLD, sizeZ: TILE_WORLD };
+  }
+  const sizeX = (Mgx - mgx + 1) * TILE_WORLD;
+  const sizeZ = (Mgz - mgz + 1) * TILE_WORLD;
+  const cx = ((mgx + Mgx) / 2) * TILE_WORLD;
+  const cz = ((mgz + Mgz) / 2) * TILE_WORLD;
+  return { cx, cz, sizeX, sizeZ };
+}
+
+function worldToNearestCell(x, z) {
+  return { gx: Math.round(x / TILE_WORLD), gz: Math.round(z / TILE_WORLD) };
+}
+
+/* ── 로그인 여부에 따라 DB or localStorage에서 타일 정보 반환 ── */
+function effectiveFloorCells() {
+  if (isLoggedIn) {
+    const cells = dbItems
+      .filter((i) => i.catId === 'floor_tile' && i.placed)
+      .map((i) => ({ gx: Math.round(i.posX || 0), gz: Math.round(i.posZ || 0) }));
+    return cells.length > 0 ? cells : [{ gx: 0, gz: 0 }];
+  }
+  return getFloorCells();
+}
+
+function effectiveFloorUnplaced() {
+  if (isLoggedIn) {
+    return dbItems.filter((i) => i.catId === 'floor_tile' && !i.placed).length;
+  }
+  return getFloorUnplaced();
+}
+
+function canPlaceFloorAt(gx, gz) {
+  const cells = effectiveFloorCells();
+  if (cells.some((c) => c.gx === gx && c.gz === gz)) return false;
+  return cells.some((c) => Math.abs(c.gx - gx) + Math.abs(c.gz - gz) === 1);
+}
 
 function getGuestWallet() {
   const v = Number(localStorage.getItem(LS.GUEST_WALLET));
@@ -184,6 +275,7 @@ async function initFromServer() {
     dbItems = Array.isArray(data.items) ? data.items : [];
     syncSceneFromData();
     renderInventory();
+    rebuildFloorScene();
   } catch {}
 }
 
@@ -195,7 +287,8 @@ const dragOffset = new THREE.Vector3();
 const planeHit   = new THREE.Vector3();
 let raycaster = new THREE.Raycaster();
 let pointer   = new THREE.Vector2();
-let scene, camera, renderer, controls, floorMesh;
+let scene, camera, renderer, controls;
+let floorGroup, floorGridHelper, sharedFloorMaterial, sharedFloorTexture;
 
 function makeWoodFloorTexture() {
   const w = 512, h = 512;
@@ -266,8 +359,26 @@ function buildFurnitureGroup(cat) {
 }
 
 function clampToRoom(x, z) {
-  const m = ROOM_HALF - 0.2;
-  return { x: Math.max(-m, Math.min(m, x)), z: Math.max(-m, Math.min(m, z)) };
+  const cells = effectiveFloorCells();
+  if (!cells.length) return { x: 0, z: 0 };
+  const inset = 0.2;
+  const h = TILE_WORLD / 2 - inset;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (const c of cells) {
+    const cx = c.gx * TILE_WORLD;
+    const cz = c.gz * TILE_WORLD;
+    minX = Math.min(minX, cx - h);
+    maxX = Math.max(maxX, cx + h);
+    minZ = Math.min(minZ, cz - h);
+    maxZ = Math.max(maxZ, cz + h);
+  }
+  return {
+    x: Math.max(minX, Math.min(maxX, x)),
+    z: Math.max(minZ, Math.min(maxZ, z)),
+  };
 }
 
 function setGroupFromRecord(group, p) {
@@ -306,7 +417,7 @@ function syncSceneFromData() {
 
   placed.forEach((p) => {
     const cat = catalogById[p.catId];
-    if (!cat) return;
+    if (!cat || cat.isFloorTile) return;
     let group = furnitureMap.get(p.id);
     if (!group) {
       group = buildFurnitureGroup(cat);
@@ -350,7 +461,22 @@ function renderShop() {
 function renderInventory() {
   invList.innerHTML = '';
   const inv = isLoggedIn ? getDbInventory() : getGuestInventory();
-  CATALOG.forEach((item) => {
+  const ft = effectiveFloorUnplaced();
+  if (ft > 0) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = `inv-chip${selectedCatalogId === 'floor_tile' ? ' active' : ''}`;
+    chip.innerHTML = `<span class="e">⬜</span><span>바닥 타일</span><span class="cnt">×${ft}</span>`;
+    chip.addEventListener('click', () => {
+      selectedCatalogId = selectedCatalogId === 'floor_tile' ? null : 'floor_tile';
+      selectedPlaceId = null;
+      renderInventory();
+      updatePlaceHint();
+      highlightSelection();
+    });
+    invList.appendChild(chip);
+  }
+  FURNITURE_CATALOG.forEach((item) => {
     const count = inv[item.id] || 0;
     if (count <= 0) return;
     const chip = document.createElement('button');
@@ -377,6 +503,11 @@ function renderInventory() {
 
 function updatePlaceHint() {
   roomHost.classList.toggle('placing-cursor', !!selectedCatalogId);
+  if (selectedCatalogId === 'floor_tile') {
+    placeHint.textContent =
+      '「바닥 타일」— 이미 깔린 바닥과 옆면이 맞닿는 빈 칸을 클릭하면 확장됩니다. (시점 조작은 상단 버튼)';
+    return;
+  }
   if (selectedCatalogId) {
     const it = catalogById[selectedCatalogId];
     placeHint.textContent = `「${it.name}」 배치 — 바닥을 클릭하세요. (시점 돌리기는 상단 버튼)`;
@@ -389,6 +520,41 @@ function updatePlaceHint() {
 async function buyItem(catId) {
   const item = catalogById[catId];
   if (!item) return;
+
+  if (catId === 'floor_tile') {
+    if (!isLoggedIn) {
+      if (getGuestWallet() < item.price) {
+        alert('코인이 부족합니다.');
+        return;
+      }
+      setGuestWallet(getGuestWallet() - item.price);
+      setFloorUnplaced(getFloorUnplaced() + 1);
+      refreshCoinUi();
+      renderShop();
+      renderInventory();
+      return;
+    }
+    try {
+      const r = await fetch(`${platformApi}/api/furniture/buy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${alpToken}` },
+        body: JSON.stringify({ catId: 'floor_tile' }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        alert(data?.error?.message || '바닥 타일 구매에 실패했습니다. 서버에 상품이 등록되지 않았을 수 있습니다.');
+        return;
+      }
+      if (typeof data.coins === 'number') serverCoins = data.coins;
+      if (data.item) dbItems.push(data.item); // DB에서 수량 관리
+      refreshCoinUi();
+      renderShop();
+      renderInventory();
+    } catch {
+      alert('서버 오류가 발생했습니다.');
+    }
+    return;
+  }
 
   if (!isLoggedIn) {
     // 게스트 모드
@@ -421,8 +587,55 @@ async function buyItem(catId) {
 }
 
 /* ── 배치 ────────────────────────────────────────────────── */
+async function tryPlaceFloorTile(x, z) {
+  if (effectiveFloorUnplaced() <= 0) return;
+  const { gx, gz } = worldToNearestCell(x, z);
+  if (!canPlaceFloorAt(gx, gz)) {
+    alert('이미 바닥이 있거나, 기존 바닥과 옆면이 맞닿는 칸에만 늘릴 수 있습니다.');
+    return;
+  }
+
+  if (!isLoggedIn) {
+    // 게스트 — localStorage
+    setFloorUnplaced(getFloorUnplaced() - 1);
+    setFloorCells([...getFloorCells(), { gx, gz }]);
+    rebuildFloorScene();
+    selectedCatalogId = null;
+    renderInventory();
+    updatePlaceHint();
+    renderShop();
+    return;
+  }
+
+  // 로그인 — DB (posX=gx, posZ=gz로 그리드 좌표 저장)
+  const unplaced = dbItems.find((i) => i.catId === 'floor_tile' && !i.placed);
+  if (!unplaced) return;
+  try {
+    const r = await fetch(`${platformApi}/api/furniture/${unplaced.id}/place`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${alpToken}` },
+      body: JSON.stringify({ posX: gx, posZ: gz, rotY: 0 }),
+    });
+    if (!r.ok) return;
+    const data = await r.json();
+    const idx = dbItems.findIndex((i) => i.id === unplaced.id);
+    if (idx >= 0) dbItems[idx] = data.item;
+    rebuildFloorScene();
+    selectedCatalogId = null;
+    renderInventory();
+    updatePlaceHint();
+    renderShop();
+  } catch {}
+}
+
 async function placeAtWorld(x, z) {
   if (!selectedCatalogId) return;
+
+  if (selectedCatalogId === 'floor_tile') {
+    await tryPlaceFloorTile(x, z);
+    return;
+  }
+
   const c = clampToRoom(x, z);
 
   if (!isLoggedIn) {
@@ -550,6 +763,57 @@ function pickFurnitureFromIntersects(intersects) {
   return null;
 }
 
+function rebuildFloorScene() {
+  if (!floorGroup || !scene) return;
+  while (floorGroup.children.length > 0) {
+    const ch = floorGroup.children[0];
+    ch.geometry?.dispose();
+    floorGroup.remove(ch);
+  }
+  if (!sharedFloorMaterial) {
+    sharedFloorTexture = makeWoodFloorTexture();
+    sharedFloorMaterial = new THREE.MeshStandardMaterial({
+      map: sharedFloorTexture,
+      color: 0xffffff,
+      roughness: 0.78,
+      metalness: 0.04,
+    });
+  }
+  for (const c of effectiveFloorCells()) {
+    const mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(TILE_WORLD, TILE_WORLD),
+      sharedFloorMaterial
+    );
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(c.gx * TILE_WORLD, 0, c.gz * TILE_WORLD);
+    mesh.receiveShadow = true;
+    mesh.userData.isFloorTile = true;
+    floorGroup.add(mesh);
+  }
+
+  if (floorGridHelper) {
+    scene.remove(floorGridHelper);
+    floorGridHelper.geometry?.dispose();
+    const gm = floorGridHelper.material;
+    if (Array.isArray(gm)) gm.forEach((m) => m.dispose?.());
+    else gm?.dispose?.();
+    floorGridHelper = null;
+  }
+  const b = getFloorBounds();
+  const size = Math.max(TILE_WORLD * 1.2, b.sizeX, b.sizeZ) + TILE_WORLD * 0.2;
+  const divisions = Math.max(4, Math.round(size / TILE_WORLD) * 4);
+  floorGridHelper = new THREE.GridHelper(size, divisions, 0xa89f97, 0xc4bbb3);
+  const gmats = Array.isArray(floorGridHelper.material)
+    ? floorGridHelper.material
+    : [floorGridHelper.material];
+  gmats.forEach((m) => {
+    m.transparent = true;
+    m.opacity = 0.32;
+  });
+  floorGridHelper.position.set(b.cx, 0.002, b.cz);
+  scene.add(floorGridHelper);
+}
+
 function onPointerDown(ev) {
   if (controls.enabled) return;
   if (performance.now() - lastDragEndTime < 180) return;
@@ -577,7 +841,7 @@ function onPointerDown(ev) {
   selectedPlaceId = null;
   highlightSelection();
   if (!selectedCatalogId) return;
-  const floorHit = intersects.find(h => h.object === floorMesh);
+  const floorHit = intersects.find((h) => h.object.userData?.isFloorTile);
   if (floorHit) {
     placeAtWorld(floorHit.point.x, floorHit.point.z);
   } else if (raycaster.ray.intersectPlane(dragPlane, planeHit)) {
@@ -647,22 +911,9 @@ function initThree() {
   sun.shadow.camera.top = 8;  sun.shadow.camera.bottom = -8;
   scene.add(sun);
 
-  const floorTex = makeWoodFloorTexture();
-  const floorGeo = new THREE.PlaneGeometry(ROOM_HALF * 2.2, ROOM_HALF * 2.2);
-  const floorMat = new THREE.MeshStandardMaterial({
-    map: floorTex, color: 0xffffff, roughness: 0.78, metalness: 0.04,
-  });
-  floorMesh = new THREE.Mesh(floorGeo, floorMat);
-  floorMesh.rotation.x = -Math.PI / 2;
-  floorMesh.receiveShadow = true;
-  floorMesh.userData.isFloor = true;
-  scene.add(floorMesh);
-
-  const grid = new THREE.GridHelper(ROOM_HALF * 2.2, 16, 0xa89f97, 0xc4bbb3);
-  const gridMats = Array.isArray(grid.material) ? grid.material : [grid.material];
-  gridMats.forEach(m => { m.transparent = true; m.opacity = 0.32; });
-  grid.position.y = 0.002;
-  scene.add(grid);
+  floorGroup = new THREE.Group();
+  scene.add(floorGroup);
+  rebuildFloorScene();
 
   function resize() {
     const w = roomHost.clientWidth, h = roomHost.clientHeight;
