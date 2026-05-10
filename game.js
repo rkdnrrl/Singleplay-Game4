@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
 const LS = {
   PLACED: 'sg4_placed_v2',
@@ -190,14 +191,55 @@ function fetchServerCoins() {
     });
 }
 
+function makeWoodFloorTexture() {
+  const w = 512;
+  const h = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  const g = ctx.createLinearGradient(0, 0, w, h);
+  g.addColorStop(0, '#c9b09a');
+  g.addColorStop(0.5, '#b89a84');
+  g.addColorStop(1, '#a88974');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+  const plank = Math.floor(w / 8);
+  for (let i = 0; i < plank; i += 1) {
+    const x = (i / plank) * w;
+    ctx.strokeStyle = `rgba(62, 39, 35, ${0.08 + (i % 3) * 0.04})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, h);
+    ctx.stroke();
+  }
+  for (let j = 0; j < 24; j += 1) {
+    const y = (j / 24) * h;
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(3.2, 3.2);
+  tex.anisotropy = 8;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 function buildFurnitureGroup(cat) {
   const g = new THREE.Group();
+  const r = Math.min(0.06, cat.w, cat.h, cat.d) * 0.12;
   const mat = new THREE.MeshStandardMaterial({
     color: cat.color,
-    roughness: 0.65,
-    metalness: 0.08,
+    roughness: cat.id === 'tv' ? 0.35 : 0.58,
+    metalness: cat.id === 'tv' ? 0.25 : 0.06,
   });
-  const geo = new THREE.BoxGeometry(cat.w, cat.h, cat.d);
+  const geo = new RoundedBoxGeometry(cat.w, cat.h, cat.d, 4, r);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.y = cat.h / 2;
   mesh.castShadow = true;
@@ -206,16 +248,26 @@ function buildFurnitureGroup(cat) {
 
   if (cat.id === 'lamp') {
     const bulb = new THREE.Mesh(
-      new THREE.SphereGeometry(0.12, 12, 12),
-      new THREE.MeshStandardMaterial({ color: 0xfffde7, emissive: 0xffecb3, emissiveIntensity: 0.6 })
+      new THREE.SphereGeometry(0.11, 24, 24),
+      new THREE.MeshStandardMaterial({
+        color: 0xfff8e1,
+        emissive: 0xffe082,
+        emissiveIntensity: 1.1,
+        roughness: 0.2,
+        metalness: 0,
+      })
     );
     bulb.position.set(0, cat.h - 0.06, 0);
     g.add(bulb);
   }
   if (cat.id === 'plant') {
     const top = new THREE.Mesh(
-      new THREE.SphereGeometry(0.22, 10, 10),
-      new THREE.MeshStandardMaterial({ color: 0x1b5e20, roughness: 0.9 })
+      new THREE.SphereGeometry(0.24, 16, 16),
+      new THREE.MeshStandardMaterial({
+        color: 0x2e7d32,
+        roughness: 0.88,
+        metalness: 0,
+      })
     );
     top.position.set(0, cat.h + 0.12, 0);
     g.add(top);
@@ -412,14 +464,19 @@ function saveDraggedPosition(placeId, x, z) {
 
 function initThree() {
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xd7ccc8);
+  const sky = 0xe8e4dc;
+  scene.background = new THREE.Color(sky);
+  scene.fog = new THREE.Fog(sky, 12, 26);
 
   camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
   camera.position.set(5.2, 5.8, 7.2);
   camera.lookAt(0, 0.5, 0);
 
-  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.08;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   roomHost.appendChild(renderer.domElement);
@@ -433,24 +490,29 @@ function initThree() {
   controls.maxPolarAngle = Math.PI * 0.48;
   controls.enabled = false;
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-  const sun = new THREE.DirectionalLight(0xfff5e6, 0.95);
-  sun.position.set(4, 10, 6);
+  scene.add(new THREE.AmbientLight(0xf5f0ff, 0.42));
+  scene.add(new THREE.HemisphereLight(0xe3f0ff, 0xc9b8a8, 0.38));
+  const sun = new THREE.DirectionalLight(0xfff6e9, 1.05);
+  sun.position.set(5.5, 11, 7);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(1024, 1024);
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.bias = -0.00025;
+  sun.shadow.normalBias = 0.02;
   sun.shadow.camera.near = 0.5;
-  sun.shadow.camera.far = 30;
+  sun.shadow.camera.far = 32;
   sun.shadow.camera.left = -8;
   sun.shadow.camera.right = 8;
   sun.shadow.camera.top = 8;
   sun.shadow.camera.bottom = -8;
   scene.add(sun);
 
+  const floorTex = makeWoodFloorTexture();
   const floorGeo = new THREE.PlaneGeometry(ROOM_HALF * 2.2, ROOM_HALF * 2.2);
   const floorMat = new THREE.MeshStandardMaterial({
-    color: 0xa1887f,
-    roughness: 0.85,
-    metalness: 0.05,
+    map: floorTex,
+    color: 0xffffff,
+    roughness: 0.78,
+    metalness: 0.04,
   });
   floorMesh = new THREE.Mesh(floorGeo, floorMat);
   floorMesh.rotation.x = -Math.PI / 2;
@@ -458,21 +520,69 @@ function initThree() {
   floorMesh.userData.isFloor = true;
   scene.add(floorMesh);
 
-  const grid = new THREE.GridHelper(ROOM_HALF * 2.2, 16, 0x5d4037, 0x8d6e63);
+  const grid = new THREE.GridHelper(ROOM_HALF * 2.2, 16, 0xa89f97, 0xc4bbb3);
+  const gridMats = Array.isArray(grid.material) ? grid.material : [grid.material];
+  gridMats.forEach((m) => {
+    m.transparent = true;
+    m.opacity = 0.32;
+  });
   grid.position.y = 0.002;
   scene.add(grid);
 
   wallGroup = new THREE.Group();
-  const wallMat = new THREE.MeshStandardMaterial({ color: 0xefebe9, side: THREE.DoubleSide, roughness: 0.9 });
-  const back = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_HALF * 2.2, 3.2), wallMat);
-  back.position.set(0, 1.6, -ROOM_HALF);
+  const wallMat = new THREE.MeshStandardMaterial({
+    color: 0xf3eee6,
+    side: THREE.DoubleSide,
+    roughness: 0.92,
+    metalness: 0,
+  });
+  const wallH = 3.2;
+  const back = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_HALF * 2.2, wallH), wallMat);
+  back.position.set(0, wallH / 2, -ROOM_HALF);
   back.receiveShadow = true;
   wallGroup.add(back);
-  const left = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_HALF * 2.2, 3.2), wallMat);
+  const left = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_HALF * 2.2, wallH), wallMat);
   left.rotation.y = Math.PI / 2;
-  left.position.set(-ROOM_HALF, 1.6, 0);
+  left.position.set(-ROOM_HALF, wallH / 2, 0);
   left.receiveShadow = true;
   wallGroup.add(left);
+
+  const trimMat = new THREE.MeshStandardMaterial({
+    color: 0x5d4a42,
+    roughness: 0.75,
+    metalness: 0.05,
+  });
+  const trimH = 0.11;
+  const trimT = 0.05;
+  const backTrim = new THREE.Mesh(
+    new THREE.BoxGeometry(ROOM_HALF * 2.2 + trimT, trimH, trimT),
+    trimMat
+  );
+  backTrim.position.set(0, trimH / 2, -ROOM_HALF + trimT / 2);
+  backTrim.castShadow = true;
+  backTrim.receiveShadow = true;
+  wallGroup.add(backTrim);
+  const leftTrim = new THREE.Mesh(
+    new THREE.BoxGeometry(trimT, trimH, ROOM_HALF * 2.2 + trimT),
+    trimMat
+  );
+  leftTrim.position.set(-ROOM_HALF + trimT / 2, trimH / 2, 0);
+  leftTrim.castShadow = true;
+  leftTrim.receiveShadow = true;
+  wallGroup.add(leftTrim);
+
+  const ceilMat = new THREE.MeshStandardMaterial({
+    color: 0xfaf8f4,
+    side: THREE.DoubleSide,
+    roughness: 1,
+    metalness: 0,
+  });
+  const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_HALF * 2.2, ROOM_HALF * 2.2), ceilMat);
+  ceiling.rotation.x = Math.PI / 2;
+  ceiling.position.set(0, wallH, 0);
+  ceiling.receiveShadow = true;
+  wallGroup.add(ceiling);
+
   scene.add(wallGroup);
 
   function resize() {
