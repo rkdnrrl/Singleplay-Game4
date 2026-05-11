@@ -595,6 +595,33 @@ body {
 }
 .voxel-input:focus { outline: 2px solid rgba(21,101,192,0.4); border-color: transparent; }
 
+.voxel-fee-info {
+  margin-top: 0.35rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 9px;
+  background: rgba(255, 248, 220, 0.85);
+  border: 1px solid rgba(180, 140, 0, 0.25);
+  display: flex; flex-direction: column; gap: 0.25rem;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+.voxel-fee-info.insufficient {
+  background: rgba(255, 235, 235, 0.9);
+  border-color: rgba(198, 40, 40, 0.3);
+}
+.fee-row { display: flex; justify-content: space-between; align-items: center; }
+.fee-key { color: #7a6a40; font-weight: 600; }
+.fee-val { font-weight: 700; color: #a67c00; }
+.fee-balance-row {
+  padding-top: 0.22rem;
+  border-top: 1px solid rgba(180, 140, 0, 0.18);
+  display: flex; justify-content: space-between; align-items: center;
+  color: #5a5040;
+}
+.fee-balance-row.danger { color: var(--danger); font-weight: 700; }
+.fee-arrow { opacity: 0.55; margin: 0 0.25rem; }
+.fee-after { font-weight: 700; }
+
 .voxel-btn-row { display: flex; gap: 0.4rem; }
 .btn-voxel-sec {
   flex: 1; padding: 0.48rem 0.4rem; font-family: inherit; font-size: 0.82rem;

@@ -1165,6 +1165,39 @@ roomHost.parentElement.insertBefore(btnOrbit, placeHint);
    복셀 에디터
 ═══════════════════════════════════════════════════════════ */
 
+/* ── 복셀 등록 수수료 ───────────────────────────────────── */
+function calcVoxelFee(price) {
+  // 판매 가격의 15%, 최소 5 코인
+  return Math.max(5, Math.ceil(price * 0.15));
+}
+
+function updateVoxelFeeDisplay() {
+  const el = document.getElementById('voxelFeeInfo');
+  if (!el) return;
+  const raw   = parseInt(document.getElementById('voxelPrice')?.value) || 100;
+  const price = Math.max(1, Math.min(9999, raw));
+  const fee   = calcVoxelFee(price);
+  const bal   = getDisplayBalance();
+  const after = bal - fee;
+  const short = after < 0;
+  const label = voxelEditingLibId ? '✏️ 수정 수수료' : '📋 등록 수수료';
+
+  el.className = 'voxel-fee-info' + (short ? ' insufficient' : '');
+  el.innerHTML = `
+    <div class="fee-row">
+      <span class="fee-key">${label}</span>
+      <span class="fee-val">−${fee.toLocaleString()} 코인 <span style="font-weight:normal;opacity:.7">(15%)</span></span>
+    </div>
+    <div class="fee-balance-row${short ? ' danger' : ''}">
+      <span>잔액 ${bal.toLocaleString()}</span>
+      <span class="fee-arrow">→</span>
+      <span class="fee-after">${short ? '⚠️ 코인 부족' : after.toLocaleString() + ' 코인'}</span>
+    </div>`;
+
+  const btnSave = document.getElementById('btnVoxelSave');
+  if (btnSave) btnSave.disabled = short;
+}
+
 /* 방 렌더용 복셀 Group */
 function buildVoxelGroupForRoom(voxels) {
   const g = new THREE.Group();
@@ -1495,6 +1528,13 @@ function openVoxelEditor(libId = null) {
   initVoxelEditorThree();
   rebuildVoxelEditorScene();
   setupVoxelPalette();
+  updateVoxelFeeDisplay();
+
+  // 가격 입력 시 수수료 실시간 갱신 (매번 새 리스너 중복 방지)
+  const priceInput = document.getElementById('voxelPrice');
+  if (priceInput) {
+    priceInput.oninput = updateVoxelFeeDisplay;
+  }
 
   // Force resize after layout (modal was hidden so clientWidth was 0)
   requestAnimationFrame(() => {
@@ -1558,8 +1598,25 @@ document.getElementById('voxelCustomColor').addEventListener('input', (e) => {
 document.getElementById('btnVoxelSave').addEventListener('click', () => {
   const name  = document.getElementById('voxelName').value.trim();
   const price = Math.max(1, Math.min(9999, parseInt(document.getElementById('voxelPrice').value) || 100));
-  if (!name) { alert('이름을 입력해 주세요.'); return; }
+  if (!name)          { alert('이름을 입력해 주세요.'); return; }
   if (!voxelMap.size) { alert('복셀을 하나 이상 추가해 주세요.'); return; }
+
+  // 수수료 확인 및 차감
+  const fee = calcVoxelFee(price);
+  const bal = getDisplayBalance();
+  if (bal < fee) {
+    alert(`코인이 부족합니다.\n등록 수수료 ${fee.toLocaleString()} 코인이 필요해요. (현재 ${bal.toLocaleString()} 코인)`);
+    return;
+  }
+
+  // 수수료 차감
+  if (isLoggedIn) {
+    serverCoins -= fee;
+  } else {
+    setGuestWallet(getGuestWallet() - fee);
+  }
+  refreshCoinUi();
+  renderShop();
 
   const lib = loadVoxelLib();
   if (voxelEditingLibId) {
@@ -1571,12 +1628,12 @@ document.getElementById('btnVoxelSave').addEventListener('click', () => {
   }
   saveVoxelLib(lib);
   closeVoxelEditor();
-  renderVoxelLibrary();
-  renderInventory();
-  // switch to create tab
+
+  // 제작 탭으로 전환
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'create'));
   shopPanel.classList.add('hidden'); invPanel.classList.add('hidden'); createPanel.classList.remove('hidden');
   renderVoxelLibrary();
+  renderInventory();
 });
 
 /* ── 탭 전환 ─────────────────────────────────────────────── */
