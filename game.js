@@ -76,6 +76,10 @@ let lastDragEndTime = 0;
 /* ── DB 가구 상태 (로그인 시) ───────────────────────────── */
 // [{ id, catId, placed, posX, posZ, rotY, purchasedAt }]
 let dbItems = [];
+// [{ id, name, price, voxels, createdAt, updatedAt }]
+let dbVoxelObjects = [];
+// [{ id, voxelObjectId, posX, posZ, rotY, placedAt }]
+let dbVoxelPlacements = [];
 
 function getDbInventory() {
   const inv = {};
@@ -170,11 +174,15 @@ function setFloorUnplaced(n) {
   localStorage.setItem(LS.FLOOR_UNPLACED, String(Math.max(0, n | 0)));
 }
 
-/* ── 복셀 라이브러리 / 배치 헬퍼 ────────────────────────── */
-function loadVoxelLib()    { return loadJson(LS.VOXEL_LIB, []); }
-function saveVoxelLib(lib) { saveJson(LS.VOXEL_LIB, lib); }
+/* ── 복셀 라이브러리 / 배치 헬퍼 (localStorage — 게스트용) ── */
+function loadVoxelLib()       { return loadJson(LS.VOXEL_LIB, []); }
+function saveVoxelLib(lib)    { saveJson(LS.VOXEL_LIB, lib); }
 function loadVoxelPlaced()    { return loadJson(LS.VOXEL_PLACED, []); }
 function saveVoxelPlaced(arr) { saveJson(LS.VOXEL_PLACED, arr); }
+
+/** 로그인 여부에 따라 올바른 복셀 데이터 반환 */
+function getActiveVoxelLib()        { return isLoggedIn ? dbVoxelObjects    : loadVoxelLib(); }
+function getActiveVoxelPlacements() { return isLoggedIn ? dbVoxelPlacements : loadVoxelPlaced(); }
 
 function getFloorBounds() {
   const cells = effectiveFloorCells();
@@ -316,16 +324,30 @@ async function initFromServer() {
     return;
   }
 
-  // 가구 데이터 로드
+  // 가구 + 복셀 데이터 병렬 로드
   try {
-    const r = await fetch(`${platformApi}/api/furniture`, {
-      headers: { Authorization: `Bearer ${alpToken}` },
-    });
-    if (!r.ok) return;
-    const data = await r.json();
-    dbItems = Array.isArray(data.items) ? data.items : [];
+    const [furnitureRes, voxelObjRes, voxelPlaceRes] = await Promise.all([
+      fetch(`${platformApi}/api/furniture`,          { headers: { Authorization: `Bearer ${alpToken}` } }),
+      fetch(`${platformApi}/api/voxels`,             { headers: { Authorization: `Bearer ${alpToken}` } }),
+      fetch(`${platformApi}/api/voxels/placements`,  { headers: { Authorization: `Bearer ${alpToken}` } }),
+    ]);
+
+    if (furnitureRes.ok) {
+      const d = await furnitureRes.json();
+      dbItems = Array.isArray(d.items) ? d.items : [];
+    }
+    if (voxelObjRes.ok) {
+      const d = await voxelObjRes.json();
+      dbVoxelObjects = Array.isArray(d.objects) ? d.objects : [];
+    }
+    if (voxelPlaceRes.ok) {
+      const d = await voxelPlaceRes.json();
+      dbVoxelPlacements = Array.isArray(d.placements) ? d.placements : [];
+    }
+
     syncSceneFromData();
     renderInventory();
+    renderVoxelLibrary();
     rebuildFloorScene();
   } catch {}
 }
@@ -482,7 +504,7 @@ function highlightSelection() {
 function syncSceneFromData() {
   const placed      = isLoggedIn ? getDbPlaced() : getGuestPlaced();
   const regularIds  = new Set(placed.map((p) => p.id));
-  const voxPlaced   = loadVoxelPlaced();
+  const voxPlaced   = getActiveVoxelPlacements();
   const voxIds      = new Set(voxPlaced.map((p) => p.id));
   const allIds      = new Set([...regularIds, ...voxIds]);
 
@@ -508,16 +530,18 @@ function syncSceneFromData() {
   });
 
   // 복셀 오브젝트 배치
-  const voxLib = loadVoxelLib();
+  const voxLib = getActiveVoxelLib();
   voxPlaced.forEach((p) => {
-    const libItem = voxLib.find((l) => l.id === p.libId);
+    // DB: p.voxelObjectId / localStorage: p.libId
+    const objectId = p.voxelObjectId || p.libId;
+    const libItem = voxLib.find((l) => l.id === objectId);
     if (!libItem) return;
     let group = furnitureMap.get(p.id);
     if (!group) {
       group = buildVoxelGroupForRoom(libItem.voxels || []);
-      group.userData.placeId = p.id;
-      group.userData.catId   = '__voxel__';
-      group.userData.libId   = p.libId;
+      group.userData.placeId   = p.id;
+      group.userData.catId     = '__voxel__';
+      group.userData.libId     = objectId;
       scene.add(group);
       furnitureMap.set(p.id, group);
     }
@@ -590,7 +614,7 @@ function renderInventory() {
     invList.appendChild(chip);
   });
   // 복셀 오브젝트 칩
-  const voxLib = loadVoxelLib();
+  const voxLib = getActiveVoxelLib();
   voxLib.forEach((item) => {
     const chipId = `voxel:${item.id}`;
     const chip = document.createElement('button');
@@ -623,7 +647,7 @@ function updatePlaceHint() {
   }
   if (selectedCatalogId && selectedCatalogId.startsWith('voxel:')) {
     const libId = selectedCatalogId.slice(6);
-    const item = loadVoxelLib().find((l) => l.id === libId);
+    const item = getActiveVoxelLib().find((l) => l.id === libId);
     placeHint.textContent = `「${item?.name || '복셀 오브젝트'}」 배치 — 바닥을 클릭하세요.`;
     return;
   }
@@ -747,13 +771,28 @@ async function placeAtWorld(x, z) {
 
   if (selectedCatalogId.startsWith('voxel:')) {
     const libId = selectedCatalogId.slice(6);
-    const libItem = loadVoxelLib().find((l) => l.id === libId);
+    const libItem = getActiveVoxelLib().find((l) => l.id === libId);
     if (!libItem) return;
     const c = clampToRoom(x, z);
-    const id = `vp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const placed = loadVoxelPlaced();
-    placed.push({ id, libId, x: c.x, z: c.z, ry: 0 });
-    saveVoxelPlaced(placed);
+
+    if (isLoggedIn) {
+      try {
+        const r = await fetch(`${platformApi}/api/voxels/placements`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${alpToken}` },
+          body: JSON.stringify({ voxelObjectId: libId, posX: c.x, posZ: c.z, rotY: 0 }),
+        });
+        if (!r.ok) return;
+        const data = await r.json();
+        dbVoxelPlacements.push(data.placement);
+      } catch { return; }
+    } else {
+      const id = `vp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const placed = loadVoxelPlaced();
+      placed.push({ id, libId, x: c.x, z: c.z, ry: 0 });
+      saveVoxelPlaced(placed);
+    }
+
     selectedCatalogId = null;
     renderInventory(); syncSceneFromData(); updatePlaceHint();
     return;
@@ -800,9 +839,34 @@ async function placeAtWorld(x, z) {
 }
 
 /* ── 드래그 위치 저장 ────────────────────────────────────── */
-async function saveDraggedPosition(placeId, x, z) {
+async function saveDraggedPosition(placeId, x, z, catId) {
   const c = clampToRoom(x, z);
 
+  // 복셀 배치 이동
+  if (catId === '__voxel__') {
+    if (!isLoggedIn) {
+      const placed = loadVoxelPlaced();
+      const idx = placed.findIndex(p => p.id === placeId);
+      if (idx >= 0) { placed[idx].x = c.x; placed[idx].z = c.z; }
+      saveVoxelPlaced(placed);
+    } else {
+      try {
+        const r = await fetch(`${platformApi}/api/voxels/placements/${placeId}/move`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${alpToken}` },
+          body: JSON.stringify({ posX: c.x, posZ: c.z }),
+        });
+        if (r.ok) {
+          const data = await r.json();
+          const idx = dbVoxelPlacements.findIndex(p => p.id === placeId);
+          if (idx >= 0) dbVoxelPlacements[idx] = data.placement;
+        }
+      } catch {}
+    }
+    return;
+  }
+
+  // 일반 가구 이동
   if (!isLoggedIn) {
     const placed = getGuestPlaced();
     const idx = placed.findIndex(p => p.id === placeId);
@@ -888,9 +952,21 @@ btnRemoveSelected.addEventListener('click', async () => {
   if (!selectedPlaceId) return;
 
   // 복셀 배치 아이템 제거
-  const voxPlaced = loadVoxelPlaced();
-  if (voxPlaced.some((p) => p.id === selectedPlaceId)) {
-    saveVoxelPlaced(voxPlaced.filter((p) => p.id !== selectedPlaceId));
+  const isVoxelPlaced = getActiveVoxelPlacements().some((p) => p.id === selectedPlaceId);
+  if (isVoxelPlaced) {
+    const pid = selectedPlaceId;
+    if (isLoggedIn) {
+      try {
+        const r = await fetch(`${platformApi}/api/voxels/placements/${pid}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${alpToken}` },
+        });
+        if (!r.ok) return;
+        dbVoxelPlacements = dbVoxelPlacements.filter(p => p.id !== pid);
+      } catch { return; }
+    } else {
+      saveVoxelPlaced(loadVoxelPlaced().filter(p => p.id !== pid));
+    }
     selectedPlaceId = null;
     syncSceneFromData(); renderInventory(); updatePlaceHint(); highlightSelection();
     return;
@@ -1065,7 +1141,12 @@ function onPointerMove(ev) {
 
 function onPointerUp() {
   if (dragTarget && dragTarget.userData.moved) {
-    saveDraggedPosition(dragTarget.userData.placeId, dragTarget.position.x, dragTarget.position.z);
+    saveDraggedPosition(
+      dragTarget.userData.placeId,
+      dragTarget.position.x,
+      dragTarget.position.z,
+      dragTarget.userData.catId,
+    );
     lastDragEndTime = performance.now();
   }
   if (dragTarget) dragTarget.userData.moved = false;
@@ -1441,7 +1522,7 @@ function renderVoxelLibrary() {
   const container = document.getElementById('voxelLibraryList');
   if (!container) return;
   container.innerHTML = '';
-  const lib = loadVoxelLib();
+  const lib = getActiveVoxelLib();
   if (!lib.length) {
     const p = document.createElement('p');
     p.style.cssText = 'font-size:.82rem;opacity:.6;margin:.3rem 0;';
@@ -1487,10 +1568,22 @@ function renderVoxelLibrary() {
 
     const btnDel = document.createElement('button');
     btnDel.className = 'btn-lib-del'; btnDel.textContent = '삭제';
-    btnDel.addEventListener('click', () => {
+    btnDel.addEventListener('click', async () => {
       if (!confirm(`「${item.name}」을 삭제하시겠습니까?`)) return;
-      saveVoxelLib(loadVoxelLib().filter(v => v.id !== item.id));
-      saveVoxelPlaced(loadVoxelPlaced().filter(p => p.libId !== item.id));
+      if (isLoggedIn) {
+        try {
+          const r = await fetch(`${platformApi}/api/voxels/${item.id}`, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${alpToken}` },
+          });
+          if (!r.ok) { alert('삭제에 실패했습니다.'); return; }
+          dbVoxelObjects    = dbVoxelObjects.filter(v => v.id !== item.id);
+          dbVoxelPlacements = dbVoxelPlacements.filter(p => p.voxelObjectId !== item.id);
+        } catch { alert('서버 오류가 발생했습니다.'); return; }
+      } else {
+        saveVoxelLib(loadVoxelLib().filter(v => v.id !== item.id));
+        saveVoxelPlaced(loadVoxelPlaced().filter(p => p.libId !== item.id));
+      }
       syncSceneFromData(); renderVoxelLibrary(); renderInventory();
     });
 
@@ -1515,7 +1608,7 @@ function openVoxelEditor(libId = null) {
   document.getElementById('voxelEditorModal').classList.remove('hidden');
 
   if (libId) {
-    const item = loadVoxelLib().find(v => v.id === libId);
+    const item = getActiveVoxelLib().find(v => v.id === libId);
     voxelMap = item ? arrayToVoxelMap(item.voxels || []) : new Map();
     document.getElementById('voxelName').value  = item?.name  || '';
     document.getElementById('voxelPrice').value = item?.price || 100;
@@ -1595,13 +1688,13 @@ document.getElementById('voxelCustomColor').addEventListener('input', (e) => {
   document.querySelectorAll('.voxel-swatch').forEach(s => s.classList.remove('active'));
 });
 
-document.getElementById('btnVoxelSave').addEventListener('click', () => {
+document.getElementById('btnVoxelSave').addEventListener('click', async () => {
   const name  = document.getElementById('voxelName').value.trim();
   const price = Math.max(1, Math.min(9999, parseInt(document.getElementById('voxelPrice').value) || 100));
   if (!name)          { alert('이름을 입력해 주세요.'); return; }
   if (!voxelMap.size) { alert('복셀을 하나 이상 추가해 주세요.'); return; }
 
-  // 수수료 확인 및 차감
+  // 수수료 확인 (클라이언트 side — 서버도 재검증함)
   const fee = calcVoxelFee(price);
   const bal = getDisplayBalance();
   if (bal < fee) {
@@ -1609,25 +1702,62 @@ document.getElementById('btnVoxelSave').addEventListener('click', () => {
     return;
   }
 
-  // 수수료 차감
+  const voxels = voxelMapToArray(voxelMap);
+  const btnSave = document.getElementById('btnVoxelSave');
+  btnSave.disabled = true;
+  btnSave.textContent = '저장 중…';
+
   if (isLoggedIn) {
-    serverCoins -= fee;
+    // ── 서버 저장 ──
+    try {
+      const isEdit = !!voxelEditingLibId;
+      const url    = isEdit
+        ? `${platformApi}/api/voxels/${voxelEditingLibId}`
+        : `${platformApi}/api/voxels`;
+      const r = await fetch(url, {
+        method: isEdit ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${alpToken}` },
+        body: JSON.stringify({ name, price, voxels }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        alert(data?.error?.message || '저장에 실패했습니다.');
+        btnSave.disabled = false; btnSave.textContent = '💾 저장하기';
+        return;
+      }
+      // 로컬 DB 배열 갱신
+      if (isEdit) {
+        const idx = dbVoxelObjects.findIndex(v => v.id === voxelEditingLibId);
+        if (idx >= 0) dbVoxelObjects[idx] = data.object;
+        else dbVoxelObjects.push(data.object);
+      } else {
+        dbVoxelObjects.push(data.object);
+      }
+      // 서버가 반환한 실제 코인으로 갱신
+      if (typeof data.coins === 'number') serverCoins = data.coins;
+    } catch {
+      alert('서버 오류가 발생했습니다.');
+      btnSave.disabled = false; btnSave.textContent = '💾 저장하기';
+      return;
+    }
   } else {
+    // ── 게스트: localStorage 저장 + 코인 차감 ──
     setGuestWallet(getGuestWallet() - fee);
+    const lib = loadVoxelLib();
+    if (voxelEditingLibId) {
+      const idx = lib.findIndex(v => v.id === voxelEditingLibId);
+      const entry = { id: voxelEditingLibId, name, price, voxels };
+      if (idx >= 0) lib[idx] = entry; else lib.push(entry);
+    } else {
+      lib.push({ id: `vl_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, name, price, voxels });
+    }
+    saveVoxelLib(lib);
   }
+
   refreshCoinUi();
   renderShop();
-
-  const lib = loadVoxelLib();
-  if (voxelEditingLibId) {
-    const idx = lib.findIndex(v => v.id === voxelEditingLibId);
-    if (idx >= 0) lib[idx] = { ...lib[idx], name, price, voxels: voxelMapToArray(voxelMap) };
-    else lib.push({ id: voxelEditingLibId, name, price, voxels: voxelMapToArray(voxelMap) });
-  } else {
-    lib.push({ id: `vl_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, name, price, voxels: voxelMapToArray(voxelMap) });
-  }
-  saveVoxelLib(lib);
   closeVoxelEditor();
+  btnSave.disabled = false; btnSave.textContent = '💾 저장하기';
 
   // 제작 탭으로 전환
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'create'));
