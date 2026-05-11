@@ -443,6 +443,36 @@ body {
 }
 .btn-new-voxel:hover { background: #fff; border-color: var(--accent); }
 
+.voxel-lib-tabs {
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 0.55rem;
+  padding: 0.2rem;
+  background: rgba(62, 50, 44, 0.06);
+  border-radius: 10px;
+}
+.voxel-lib-tab {
+  flex: 1;
+  padding: 0.45rem 0.35rem;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent-soft);
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+.voxel-lib-tab:hover {
+  background: rgba(255, 255, 255, 0.55);
+}
+.voxel-lib-tab.active {
+  background: linear-gradient(160deg, var(--accent) 0%, #5a4338 100%);
+  color: #fff;
+  box-shadow: 0 2px 10px rgba(109, 83, 70, 0.28);
+}
+
 .voxel-library {
   display: flex;
   flex-direction: column;
@@ -475,6 +505,18 @@ body {
 .voxel-lib-meta .name { font-weight:700; font-size:0.88rem; }
 .voxel-lib-meta .price { font-size:0.78rem; color:#a67c00; margin-top:0.1rem; }
 .voxel-lib-meta .cnt   { font-size:0.75rem; color:#888; }
+.voxel-lib-meta .voxel-author {
+  font-size: 0.72rem;
+  color: #6d5a52;
+  margin-top: 0.2rem;
+}
+.inv-voxel-section-label {
+  margin: 0.35rem 0 0.2rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--accent-soft);
+  letter-spacing: 0.02em;
+}
 .voxel-lib-actions { display:flex; flex-direction:column; gap:0.3rem; }
 .btn-lib-place { padding:0.32rem 0.55rem; font-family:inherit; font-size:0.78rem;
   border:none; border-radius:8px; cursor:pointer; font-weight:600;

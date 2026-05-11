@@ -67,6 +67,10 @@ const platformApi = window.__ALP_PLATFORM_API__ || '';
 
 let isLoggedIn      = false;
 let serverCoins     = 0;
+/** 로그인 사용자 id — 복셀 소유 구분용 (API 필드명 제각각 대응) */
+let currentUserId   = null;
+/** 제작 탭: mine | community */
+let voxelLibrarySubTab = 'mine';
 let selectedPlaceId = null;   // DB id 또는 게스트 placeId
 let selectedCatalogId = null;
 /** 바닥 타일 칸 선택 (치우기용) */
@@ -184,6 +188,36 @@ function saveVoxelPlaced(arr) { saveJson(LS.VOXEL_PLACED, arr); }
 function getActiveVoxelLib()        { return isLoggedIn ? dbVoxelObjects    : loadVoxelLib(); }
 function getActiveVoxelPlacements() { return isLoggedIn ? dbVoxelPlacements : loadVoxelPlaced(); }
 
+function getVoxelOwnerId(obj) {
+  if (!obj || typeof obj !== 'object') return null;
+  const u =
+    obj.userId ??
+    obj.user_id ??
+    obj.ownerId ??
+    obj.owner_id ??
+    obj.creatorId ??
+    obj.creator_id ??
+    obj.createdBy ??
+    obj.user?.id ??
+    obj.user?.userId;
+  return u != null && u !== '' ? u : null;
+}
+
+/** 게스트는 전부 내 작품. 로그인 시 소유자 필드 없으면 내 작품으로 간주(기존 API 호환). */
+function isVoxelObjectMine(obj) {
+  if (!isLoggedIn) return true;
+  if (currentUserId == null) return true;
+  const oid = getVoxelOwnerId(obj);
+  if (oid == null) return true;
+  return String(oid) === String(currentUserId);
+}
+
+function getVoxelLibForSubTab() {
+  const lib = getActiveVoxelLib();
+  if (voxelLibrarySubTab === 'mine') return lib.filter(isVoxelObjectMine);
+  return lib.filter((o) => !isVoxelObjectMine(o));
+}
+
 function getFloorBounds() {
   const cells = effectiveFloorCells();
   let mgx = Infinity;
@@ -296,6 +330,7 @@ function refreshCoinUi() {
 async function initFromServer() {
   if (!alpToken || !platformApi) {
     isLoggedIn = false;
+    currentUserId = null;
     refreshCoinUi();
     renderShop();
     return;
@@ -309,11 +344,14 @@ async function initFromServer() {
     if (data?.user && typeof data.user.coins === 'number') {
       isLoggedIn = true;
       serverCoins = data.user.coins;
+      currentUserId = data.user.id ?? data.user.userId ?? data.user.uuid ?? null;
     } else {
       isLoggedIn = false;
+      currentUserId = null;
     }
   } catch {
     isLoggedIn = false;
+    currentUserId = null;
   }
 
   refreshCoinUi();
@@ -613,21 +651,36 @@ function renderInventory() {
     });
     invList.appendChild(chip);
   });
-  // 복셀 오브젝트 칩
+  // 복셀 오브젝트 칩 (내 작품 / 다른 사람 작품 구분)
   const voxLib = getActiveVoxelLib();
-  voxLib.forEach((item) => {
-    const chipId = `voxel:${item.id}`;
-    const chip = document.createElement('button');
-    chip.type = 'button';
-    chip.className = 'inv-chip' + (selectedCatalogId === chipId ? ' active' : '');
-    chip.innerHTML = `<span class="e">🎨</span><span>${item.name || '이름없음'}</span><span class="cnt">복셀</span>`;
-    chip.addEventListener('click', () => {
-      selectedCatalogId = selectedCatalogId === chipId ? null : chipId;
-      selectedPlaceId = null; selectedFloorCell = null;
-      renderInventory(); updatePlaceHint(); highlightSelection();
+  const mineVox = voxLib.filter(isVoxelObjectMine);
+  const otherVox = voxLib.filter((o) => !isVoxelObjectMine(o));
+
+  function appendVoxelChips(items, sectionLabel) {
+    if (!items.length) return;
+    if (sectionLabel) {
+      const lab = document.createElement('p');
+      lab.className = 'inv-voxel-section-label';
+      lab.textContent = sectionLabel;
+      invList.appendChild(lab);
+    }
+    items.forEach((item) => {
+      const chipId = `voxel:${item.id}`;
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'inv-chip' + (selectedCatalogId === chipId ? ' active' : '');
+      chip.innerHTML = `<span class="e">🎨</span><span>${item.name || '이름없음'}</span><span class="cnt">복셀</span>`;
+      chip.addEventListener('click', () => {
+        selectedCatalogId = selectedCatalogId === chipId ? null : chipId;
+        selectedPlaceId = null; selectedFloorCell = null;
+        renderInventory(); updatePlaceHint(); highlightSelection();
+      });
+      invList.appendChild(chip);
     });
-    invList.appendChild(chip);
-  });
+  }
+
+  appendVoxelChips(mineVox, mineVox.length && otherVox.length ? '내 복셀' : '');
+  appendVoxelChips(otherVox, otherVox.length ? '다른 사람 복셀' : '');
 
   if (invList.children.length === 0) {
     const empty = document.createElement('p');
@@ -1517,20 +1570,55 @@ function drawVoxelPreview(canvas, voxels) {
   });
 }
 
+function syncVoxelLibTabControls() {
+  document.querySelectorAll('.voxel-lib-tab').forEach((b) => {
+    const on = b.dataset.voxelLibTab === voxelLibrarySubTab;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  const title = document.getElementById('createPanelTitle');
+  if (title) {
+    title.textContent = voxelLibrarySubTab === 'mine' ? '내가 만든 복셀' : '다른 사람 복셀';
+  }
+  const nw = document.getElementById('btnNewVoxel');
+  if (nw) nw.style.display = voxelLibrarySubTab === 'mine' ? '' : 'none';
+}
+
+function voxelAuthorLine(item) {
+  if (voxelLibrarySubTab !== 'community') return '';
+  const nick =
+    item.creatorName ??
+    item.creator?.name ??
+    item.userName ??
+    item.ownerName ??
+    item.authorName ??
+    '';
+  return nick ? `<div class="voxel-author">👤 ${nick}</div>` : '';
+}
+
 /* ── 복셀 라이브러리 렌더 ───────────────────────────────── */
 function renderVoxelLibrary() {
   const container = document.getElementById('voxelLibraryList');
   if (!container) return;
+  syncVoxelLibTabControls();
   container.innerHTML = '';
-  const lib = getActiveVoxelLib();
+  const lib = getVoxelLibForSubTab();
   if (!lib.length) {
     const p = document.createElement('p');
-    p.style.cssText = 'font-size:.82rem;opacity:.6;margin:.3rem 0;';
-    p.textContent = '아직 만든 오브젝트가 없어요. 위 버튼으로 시작하세요!';
+    p.style.cssText = 'font-size:.82rem;opacity:.6;margin:.3rem 0;line-height:1.45;';
+    if (voxelLibrarySubTab === 'mine') {
+      p.textContent = '아직 만든 오브젝트가 없어요. 위 버튼으로 시작하세요!';
+    } else if (!isLoggedIn) {
+      p.textContent = '로그인하면 다른 사용자가 등록한 복셀을 이 탭에서 볼 수 있어요.';
+    } else {
+      p.textContent =
+        '아직 다른 사람 복셀이 없어요. (서버가 작품마다 소유자 정보를 내려주면 여기에 표시됩니다.)';
+    }
     container.appendChild(p);
     return;
   }
   lib.forEach((item) => {
+    const mine = isVoxelObjectMine(item);
     const card = document.createElement('div');
     card.className = 'voxel-lib-card';
 
@@ -1545,7 +1633,7 @@ function renderVoxelLibrary() {
     meta.className = 'voxel-lib-meta';
     meta.innerHTML = `<div class="name">${item.name || '이름없음'}</div>
       <div class="price">💰 ${(item.price || 0).toLocaleString()}</div>
-      <div class="cnt">${(item.voxels || []).length}개 복셀</div>`;
+      <div class="cnt">${(item.voxels || []).length}개 복셀</div>${voxelAuthorLine(item)}`;
 
     const actions = document.createElement('div');
     actions.className = 'voxel-lib-actions';
@@ -1562,34 +1650,36 @@ function renderVoxelLibrary() {
       renderInventory(); updatePlaceHint(); highlightSelection();
     });
 
-    const btnEdit = document.createElement('button');
-    btnEdit.className = 'btn-lib-edit'; btnEdit.textContent = '수정';
-    btnEdit.addEventListener('click', () => openVoxelEditor(item.id));
-
-    const btnDel = document.createElement('button');
-    btnDel.className = 'btn-lib-del'; btnDel.textContent = '삭제';
-    btnDel.addEventListener('click', async () => {
-      if (!confirm(`「${item.name}」을 삭제하시겠습니까?`)) return;
-      if (isLoggedIn) {
-        try {
-          const r = await fetch(`${platformApi}/api/voxels/${item.id}`, {
-            method: 'DELETE',
-            headers: { Authorization: `Bearer ${alpToken}` },
-          });
-          if (!r.ok) { alert('삭제에 실패했습니다.'); return; }
-          dbVoxelObjects    = dbVoxelObjects.filter(v => v.id !== item.id);
-          dbVoxelPlacements = dbVoxelPlacements.filter(p => p.voxelObjectId !== item.id);
-        } catch { alert('서버 오류가 발생했습니다.'); return; }
-      } else {
-        saveVoxelLib(loadVoxelLib().filter(v => v.id !== item.id));
-        saveVoxelPlaced(loadVoxelPlaced().filter(p => p.libId !== item.id));
-      }
-      syncSceneFromData(); renderVoxelLibrary(); renderInventory();
-    });
-
     actions.appendChild(btnPlace);
-    actions.appendChild(btnEdit);
-    actions.appendChild(btnDel);
+    if (mine) {
+      const btnEdit = document.createElement('button');
+      btnEdit.className = 'btn-lib-edit'; btnEdit.textContent = '수정';
+      btnEdit.addEventListener('click', () => openVoxelEditor(item.id));
+
+      const btnDel = document.createElement('button');
+      btnDel.className = 'btn-lib-del'; btnDel.textContent = '삭제';
+      btnDel.addEventListener('click', async () => {
+        if (!confirm(`「${item.name}」을 삭제하시겠습니까?`)) return;
+        if (isLoggedIn) {
+          try {
+            const r = await fetch(`${platformApi}/api/voxels/${item.id}`, {
+              method: 'DELETE',
+              headers: { Authorization: `Bearer ${alpToken}` },
+            });
+            if (!r.ok) { alert('삭제에 실패했습니다.'); return; }
+            dbVoxelObjects    = dbVoxelObjects.filter(v => v.id !== item.id);
+            dbVoxelPlacements = dbVoxelPlacements.filter(p => p.voxelObjectId !== item.id);
+          } catch { alert('서버 오류가 발생했습니다.'); return; }
+        } else {
+          saveVoxelLib(loadVoxelLib().filter(v => v.id !== item.id));
+          saveVoxelPlaced(loadVoxelPlaced().filter(p => p.libId !== item.id));
+        }
+        syncSceneFromData(); renderVoxelLibrary(); renderInventory();
+      });
+      actions.appendChild(btnEdit);
+      actions.appendChild(btnDel);
+    }
+
     card.appendChild(previewWrap); card.appendChild(meta); card.appendChild(actions);
     container.appendChild(card);
   });
@@ -1597,6 +1687,13 @@ function renderVoxelLibrary() {
 
 /* ── 에디터 열기 / 닫기 ─────────────────────────────────── */
 function openVoxelEditor(libId = null) {
+  if (libId) {
+    const item = getActiveVoxelLib().find(v => v.id === libId);
+    if (item && !isVoxelObjectMine(item)) {
+      alert('다른 사람이 만든 복셀은 수정할 수 없어요.');
+      return;
+    }
+  }
   voxelEditorOpen   = true;
   voxelEditingLibId = libId;
   voxelHistory      = [];
@@ -1775,6 +1872,13 @@ document.querySelectorAll('.tab').forEach(tab => {
     invPanel.classList.toggle('hidden', id !== 'inv');
     createPanel.classList.toggle('hidden', id !== 'create');
     if (id === 'create') renderVoxelLibrary();
+  });
+});
+
+document.querySelectorAll('.voxel-lib-tab').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    voxelLibrarySubTab = btn.dataset.voxelLibTab || 'mine';
+    renderVoxelLibrary();
   });
 });
 

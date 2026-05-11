@@ -59,7 +59,11 @@
           <div id="invList" class="inv-list"></div>
         </div>
         <div id="createPanel" class="tab-panel hidden">
-          <h3 class="panel-title">내 복셀 작품</h3>
+          <h3 id="createPanelTitle" class="panel-title">내가 만든 복셀</h3>
+          <div class="voxel-lib-tabs" role="tablist">
+            <button type="button" class="voxel-lib-tab active" data-voxel-lib-tab="mine" role="tab" aria-selected="true">내가 만든 복셀</button>
+            <button type="button" class="voxel-lib-tab" data-voxel-lib-tab="community" role="tab" aria-selected="false">다른 사람 복셀</button>
+          </div>
           <button id="btnNewVoxel" class="btn-new-voxel">+ 새 오브젝트 만들기</button>
           <div id="voxelLibraryList" class="voxel-library"></div>
         </div>
