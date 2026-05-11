@@ -151,7 +151,7 @@ body {
     0 0 0 1px rgba(62, 50, 44, 0.06),
     0 20px 48px var(--shadow-deep),
     0 4px 12px var(--shadow);
-  background: linear-gradient(145deg, #2a2630 0%, #1a1820 100%);
+  background: linear-gradient(145deg, #e2dfe8 0%, #cfc8d8 100%);
 }
 
 .room canvas {
@@ -489,7 +489,7 @@ body {
 /* ── 복셀 에디터 모달 ─────────────────────────────────────── */
 .voxel-modal {
   position: fixed; inset: 0; z-index: 900;
-  background: rgba(30,24,20,0.72);
+  background: rgba(245, 242, 248, 0.78);
   backdrop-filter: blur(6px);
   display: flex; align-items: center; justify-content: center;
   padding: 1rem;
@@ -531,7 +531,7 @@ body {
 
 .voxel-canvas-wrap {
   position: relative;
-  background: #1a1820;
+  background: #e4e2ec;
   min-height: 320px;
   flex: 1;
   display: flex; flex-direction: column;
@@ -542,8 +542,9 @@ body {
 }
 .voxel-canvas-hint {
   margin: 0; padding: 0.28rem 0.65rem;
-  font-size: 0.75rem; color: rgba(255,255,255,0.65);
-  background: rgba(0,0,0,0.42); border-radius: 8px;
+  font-size: 0.75rem; color: rgba(45, 36, 32, 0.82);
+  background: rgba(255, 255, 255, 0.82); border-radius: 8px;
+  border: 1px solid rgba(62, 50, 44, 0.12);
   pointer-events: none;
 }
 #voxelCanvasWrap canvas {

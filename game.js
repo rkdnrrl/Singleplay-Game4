@@ -1074,9 +1074,9 @@ function onPointerUp() {
 
 function initThree() {
   scene = new THREE.Scene();
-  const sky = 0xe8e4dc;
+  const sky = 0xf5f2eb;
   scene.background = new THREE.Color(sky);
-  scene.fog = new THREE.Fog(sky, 12, 26);
+  scene.fog = new THREE.Fog(sky, 22, 48);
 
   camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
   camera.position.set(5.2, 5.8, 7.2);
@@ -1086,7 +1086,7 @@ function initThree() {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.08;
+  renderer.toneMappingExposure = 1.22;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   roomHost.appendChild(renderer.domElement);
@@ -1100,9 +1100,9 @@ function initThree() {
   controls.maxPolarAngle = Math.PI * 0.48;
   controls.enabled = false;
 
-  scene.add(new THREE.AmbientLight(0xf5f0ff, 0.42));
-  scene.add(new THREE.HemisphereLight(0xe3f0ff, 0xc9b8a8, 0.38));
-  const sun = new THREE.DirectionalLight(0xfff6e9, 1.05);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.52));
+  scene.add(new THREE.HemisphereLight(0xeef4ff, 0xe8dfd6, 0.48));
+  const sun = new THREE.DirectionalLight(0xfffbf5, 1.18);
   sun.position.set(5.5, 11, 7);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
@@ -1235,9 +1235,10 @@ function initVoxelEditorThree() {
   const wrap = document.getElementById('voxelCanvasWrap');
   if (!wrap) return;
 
+  const vSky = 0xeceaf2;
   vScene = new THREE.Scene();
-  vScene.background = new THREE.Color(0x1a1820);
-  vScene.fog = new THREE.Fog(0x1a1820, 60, 100);
+  vScene.background = new THREE.Color(vSky);
+  vScene.fog = new THREE.Fog(vSky, 85, 160);
 
   vCamera = new THREE.PerspectiveCamera(50, 1, 0.1, 200);
   vCamera.position.set(VOXEL_GRID * 0.9, VOXEL_GRID * 0.75, VOXEL_GRID * 1.1);
@@ -1246,6 +1247,8 @@ function initVoxelEditorThree() {
   vRenderer = new THREE.WebGLRenderer({ antialias: true });
   vRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   vRenderer.outputColorSpace = THREE.SRGBColorSpace;
+  vRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+  vRenderer.toneMappingExposure = 1.2;
   vRenderer.shadowMap.enabled = true;
   vRenderer.shadowMap.type = THREE.PCFSoftShadowMap;
   wrap.appendChild(vRenderer.domElement);
@@ -1258,14 +1261,15 @@ function initVoxelEditorThree() {
   vControls.maxDistance = 100;
   vControls.enabled = false;
 
-  vScene.add(new THREE.AmbientLight(0xf0eeff, 0.55));
-  const vSun = new THREE.DirectionalLight(0xfff6e9, 1.2);
+  vScene.add(new THREE.AmbientLight(0xffffff, 0.62));
+  vScene.add(new THREE.HemisphereLight(0xe8eeff, 0xd8d4e4, 0.45));
+  const vSun = new THREE.DirectionalLight(0xfffbf5, 1.38);
   vSun.position.set(20, 40, 20); vSun.castShadow = true;
   vScene.add(vSun);
 
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(VOXEL_GRID, VOXEL_GRID),
-    new THREE.MeshStandardMaterial({ color: 0x332a44, roughness: 0.9 })
+    new THREE.MeshStandardMaterial({ color: 0xb8b3c9, roughness: 0.88, metalness: 0.02 })
   );
   floor.rotation.x = -Math.PI / 2;
   floor.position.set(VOXEL_GRID / 2 - 0.5, -0.5, VOXEL_GRID / 2 - 0.5);
@@ -1273,10 +1277,10 @@ function initVoxelEditorThree() {
   floor.userData.isEditorFloor = true;
   vScene.add(floor);
 
-  const grid = new THREE.GridHelper(VOXEL_GRID, VOXEL_GRID, 0x665577, 0x443355);
+  const grid = new THREE.GridHelper(VOXEL_GRID, VOXEL_GRID, 0x8f85a8, 0x6f6688);
   grid.position.set(VOXEL_GRID / 2 - 0.5, -0.5, VOXEL_GRID / 2 - 0.5);
   const gm = Array.isArray(grid.material) ? grid.material : [grid.material];
-  gm.forEach(m => { m.transparent = true; m.opacity = 0.45; });
+  gm.forEach(m => { m.transparent = true; m.opacity = 0.38; });
   vScene.add(grid);
 
   vVoxelGroup = new THREE.Group();
