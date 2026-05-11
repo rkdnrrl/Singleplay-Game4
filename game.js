@@ -10,7 +10,20 @@ const LS = {
   GUEST_WALLET:  'sg4_guest_wallet_v1',
   FLOOR_CELLS:   'sg4_floor_cells_v1',
   FLOOR_UNPLACED:'sg4_floor_unplaced_v1',
+  VOXEL_LIB:    'sg4_voxel_lib_v1',
+  VOXEL_PLACED:  'sg4_voxel_placed_v1',
 };
+
+/* ── 복셀 상수 ───────────────────────────────────────────── */
+const VOXEL_GRID  = 32;
+const VOXEL_SCALE = 0.045; // 월드 단위/복셀
+
+const PALETTE_COLORS = [
+  '#ffffff','#cccccc','#888888','#444444','#000000','#c62828',
+  '#f4511e','#fb8c00','#f9a825','#7cb342','#2e7d32','#00897b',
+  '#0277bd','#1565c0','#4527a0','#6a1b9a','#ad1457','#880e4f',
+  '#ffd180','#b9f6ca','#80d8ff','#ea80fc','#ff6e40','#e0e0e0',
+];
 
 const GUEST_START_COINS = 1200;
 /** 레거시 배치 좌표 변환용 (옛 저장 데이터) */
@@ -45,6 +58,7 @@ const placeHint         = document.getElementById('placeHint');
 const btnRemoveSelected = document.getElementById('btnRemoveSelected');
 const shopPanel         = document.getElementById('shopPanel');
 const invPanel          = document.getElementById('invPanel');
+const createPanel       = document.getElementById('createPanel');
 
 /* ── 플랫폼 연동 ──────────────────────────────────────── */
 const urlParams   = new URLSearchParams(window.location.search);
@@ -155,6 +169,12 @@ function getFloorUnplaced() {
 function setFloorUnplaced(n) {
   localStorage.setItem(LS.FLOOR_UNPLACED, String(Math.max(0, n | 0)));
 }
+
+/* ── 복셀 라이브러리 / 배치 헬퍼 ────────────────────────── */
+function loadVoxelLib()    { return loadJson(LS.VOXEL_LIB, []); }
+function saveVoxelLib(lib) { saveJson(LS.VOXEL_LIB, lib); }
+function loadVoxelPlaced()    { return loadJson(LS.VOXEL_PLACED, []); }
+function saveVoxelPlaced(arr) { saveJson(LS.VOXEL_PLACED, arr); }
 
 function getFloorBounds() {
   const cells = effectiveFloorCells();
@@ -460,11 +480,14 @@ function highlightSelection() {
 }
 
 function syncSceneFromData() {
-  const placed = isLoggedIn ? getDbPlaced() : getGuestPlaced();
-  const ids = new Set(placed.map((p) => p.id));
+  const placed      = isLoggedIn ? getDbPlaced() : getGuestPlaced();
+  const regularIds  = new Set(placed.map((p) => p.id));
+  const voxPlaced   = loadVoxelPlaced();
+  const voxIds      = new Set(voxPlaced.map((p) => p.id));
+  const allIds      = new Set([...regularIds, ...voxIds]);
 
   furnitureMap.forEach((group, id) => {
-    if (!ids.has(id)) {
+    if (!allIds.has(id)) {
       scene.remove(group);
       furnitureMap.delete(id);
     }
@@ -484,7 +507,24 @@ function syncSceneFromData() {
     setGroupFromRecord(group, p);
   });
 
-  if (selectedPlaceId && !ids.has(selectedPlaceId)) selectedPlaceId = null;
+  // 복셀 오브젝트 배치
+  const voxLib = loadVoxelLib();
+  voxPlaced.forEach((p) => {
+    const libItem = voxLib.find((l) => l.id === p.libId);
+    if (!libItem) return;
+    let group = furnitureMap.get(p.id);
+    if (!group) {
+      group = buildVoxelGroupForRoom(libItem.voxels || []);
+      group.userData.placeId = p.id;
+      group.userData.catId   = '__voxel__';
+      group.userData.libId   = p.libId;
+      scene.add(group);
+      furnitureMap.set(p.id, group);
+    }
+    setGroupFromRecord(group, p);
+  });
+
+  if (selectedPlaceId && !allIds.has(selectedPlaceId)) selectedPlaceId = null;
   highlightSelection();
 }
 
@@ -549,11 +589,27 @@ function renderInventory() {
     });
     invList.appendChild(chip);
   });
+  // 복셀 오브젝트 칩
+  const voxLib = loadVoxelLib();
+  voxLib.forEach((item) => {
+    const chipId = `voxel:${item.id}`;
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'inv-chip' + (selectedCatalogId === chipId ? ' active' : '');
+    chip.innerHTML = `<span class="e">🎨</span><span>${item.name || '이름없음'}</span><span class="cnt">복셀</span>`;
+    chip.addEventListener('click', () => {
+      selectedCatalogId = selectedCatalogId === chipId ? null : chipId;
+      selectedPlaceId = null; selectedFloorCell = null;
+      renderInventory(); updatePlaceHint(); highlightSelection();
+    });
+    invList.appendChild(chip);
+  });
+
   if (invList.children.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'panel-title';
     empty.style.opacity = '0.7';
-    empty.textContent = '상점에서 가구를 먼저 구매하세요.';
+    empty.textContent = '상점에서 가구를 먼저 구매하거나, 제작 탭에서 복셀 오브젝트를 만드세요.';
     invList.appendChild(empty);
   }
 }
@@ -563,6 +619,12 @@ function updatePlaceHint() {
   if (selectedCatalogId === 'floor_tile') {
     placeHint.textContent =
       '「바닥 타일」— 이미 깔린 바닥과 옆면이 맞닿는 빈 칸을 클릭하면 확장됩니다. (시점 조작은 상단 버튼)';
+    return;
+  }
+  if (selectedCatalogId && selectedCatalogId.startsWith('voxel:')) {
+    const libId = selectedCatalogId.slice(6);
+    const item = loadVoxelLib().find((l) => l.id === libId);
+    placeHint.textContent = `「${item?.name || '복셀 오브젝트'}」 배치 — 바닥을 클릭하세요.`;
     return;
   }
   if (selectedCatalogId) {
@@ -680,6 +742,20 @@ async function placeAtWorld(x, z) {
 
   if (selectedCatalogId === 'floor_tile') {
     await tryPlaceFloorTile(x, z);
+    return;
+  }
+
+  if (selectedCatalogId.startsWith('voxel:')) {
+    const libId = selectedCatalogId.slice(6);
+    const libItem = loadVoxelLib().find((l) => l.id === libId);
+    if (!libItem) return;
+    const c = clampToRoom(x, z);
+    const id = `vp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const placed = loadVoxelPlaced();
+    placed.push({ id, libId, x: c.x, z: c.z, ry: 0 });
+    saveVoxelPlaced(placed);
+    selectedCatalogId = null;
+    renderInventory(); syncSceneFromData(); updatePlaceHint();
     return;
   }
 
@@ -810,6 +886,15 @@ btnRemoveSelected.addEventListener('click', async () => {
     return;
   }
   if (!selectedPlaceId) return;
+
+  // 복셀 배치 아이템 제거
+  const voxPlaced = loadVoxelPlaced();
+  if (voxPlaced.some((p) => p.id === selectedPlaceId)) {
+    saveVoxelPlaced(voxPlaced.filter((p) => p.id !== selectedPlaceId));
+    selectedPlaceId = null;
+    syncSceneFromData(); renderInventory(); updatePlaceHint(); highlightSelection();
+    return;
+  }
 
   if (!isLoggedIn) {
     const placed = getGuestPlaced();
@@ -1076,6 +1161,420 @@ btnOrbit.addEventListener('click', () => {
 });
 roomHost.parentElement.insertBefore(btnOrbit, placeHint);
 
+/* ═══════════════════════════════════════════════════════════
+   복셀 에디터
+═══════════════════════════════════════════════════════════ */
+
+/* 방 렌더용 복셀 Group */
+function buildVoxelGroupForRoom(voxels) {
+  const g = new THREE.Group();
+  const matCache = new Map();
+  for (const v of voxels) {
+    let mat = matCache.get(v.color);
+    if (!mat) {
+      mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(v.color), roughness: 0.72, metalness: 0.06 });
+      matCache.set(v.color, mat);
+    }
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(VOXEL_SCALE, VOXEL_SCALE, VOXEL_SCALE), mat);
+    mesh.position.set(v.x * VOXEL_SCALE, v.y * VOXEL_SCALE + VOXEL_SCALE / 2, v.z * VOXEL_SCALE);
+    mesh.castShadow = true;
+    g.add(mesh);
+  }
+  return g;
+}
+
+function voxelMapToArray(map) {
+  const arr = [];
+  map.forEach((color, key) => {
+    const [x, y, z] = key.split(',').map(Number);
+    arr.push({ x, y, z, color });
+  });
+  return arr;
+}
+function arrayToVoxelMap(arr) {
+  const m = new Map();
+  for (const v of arr) m.set(`${v.x},${v.y},${v.z}`, v.color);
+  return m;
+}
+
+/* ── 에디터 상태 ────────────────────────────────────────── */
+let voxelMap          = new Map();
+let voxelHistory      = [];
+let voxelCurrentColor = PALETTE_COLORS[3];
+let voxelEditorOpen   = false;
+let voxelEditingLibId = null;
+
+/* ── 에디터 Three.js ─────────────────────────────────────── */
+let vScene, vCamera, vRenderer, vControls;
+let vVoxelGroup, vGhost;
+let vRaycaster = new THREE.Raycaster();
+let vPointer   = new THREE.Vector2();
+let vEditorOrbit = false;
+const VOXEL_GEO_UNIT = new THREE.BoxGeometry(1, 1, 1);
+
+function rebuildVoxelEditorScene() {
+  if (!vVoxelGroup) return;
+  while (vVoxelGroup.children.length) vVoxelGroup.remove(vVoxelGroup.children[0]);
+  voxelMap.forEach((color, key) => {
+    const [x, y, z] = key.split(',').map(Number);
+    const mesh = new THREE.Mesh(
+      VOXEL_GEO_UNIT,
+      new THREE.MeshStandardMaterial({ color: new THREE.Color(color), roughness: 0.7, metalness: 0.05 })
+    );
+    mesh.position.set(x, y, z);
+    mesh.userData.isVoxel = true;
+    mesh.userData.vKey = key;
+    vVoxelGroup.add(mesh);
+  });
+  const el = document.getElementById('voxelCountText');
+  if (el) el.textContent = `(${voxelMap.size}개)`;
+}
+
+function initVoxelEditorThree() {
+  if (vRenderer) return;
+  const wrap = document.getElementById('voxelCanvasWrap');
+  if (!wrap) return;
+
+  vScene = new THREE.Scene();
+  vScene.background = new THREE.Color(0x1a1820);
+  vScene.fog = new THREE.Fog(0x1a1820, 60, 100);
+
+  vCamera = new THREE.PerspectiveCamera(50, 1, 0.1, 200);
+  vCamera.position.set(VOXEL_GRID * 0.9, VOXEL_GRID * 0.75, VOXEL_GRID * 1.1);
+  vCamera.lookAt(VOXEL_GRID / 2, VOXEL_GRID / 4, VOXEL_GRID / 2);
+
+  vRenderer = new THREE.WebGLRenderer({ antialias: true });
+  vRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  vRenderer.outputColorSpace = THREE.SRGBColorSpace;
+  vRenderer.shadowMap.enabled = true;
+  vRenderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  wrap.appendChild(vRenderer.domElement);
+
+  vControls = new OrbitControls(vCamera, vRenderer.domElement);
+  vControls.target.set(VOXEL_GRID / 2, VOXEL_GRID / 4, VOXEL_GRID / 2);
+  vControls.enableDamping = true;
+  vControls.dampingFactor = 0.1;
+  vControls.minDistance = 5;
+  vControls.maxDistance = 100;
+  vControls.enabled = false;
+
+  vScene.add(new THREE.AmbientLight(0xf0eeff, 0.55));
+  const vSun = new THREE.DirectionalLight(0xfff6e9, 1.2);
+  vSun.position.set(20, 40, 20); vSun.castShadow = true;
+  vScene.add(vSun);
+
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(VOXEL_GRID, VOXEL_GRID),
+    new THREE.MeshStandardMaterial({ color: 0x332a44, roughness: 0.9 })
+  );
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.set(VOXEL_GRID / 2 - 0.5, -0.5, VOXEL_GRID / 2 - 0.5);
+  floor.receiveShadow = true;
+  floor.userData.isEditorFloor = true;
+  vScene.add(floor);
+
+  const grid = new THREE.GridHelper(VOXEL_GRID, VOXEL_GRID, 0x665577, 0x443355);
+  grid.position.set(VOXEL_GRID / 2 - 0.5, -0.5, VOXEL_GRID / 2 - 0.5);
+  const gm = Array.isArray(grid.material) ? grid.material : [grid.material];
+  gm.forEach(m => { m.transparent = true; m.opacity = 0.45; });
+  vScene.add(grid);
+
+  vVoxelGroup = new THREE.Group();
+  vScene.add(vVoxelGroup);
+
+  vGhost = new THREE.Mesh(
+    VOXEL_GEO_UNIT,
+    new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.4, depthWrite: false })
+  );
+  vGhost.visible = false;
+  vScene.add(vGhost);
+
+  function vResize() {
+    const w = wrap.clientWidth, h = wrap.clientHeight;
+    if (!w || !h) return;
+    vCamera.aspect = w / h;
+    vCamera.updateProjectionMatrix();
+    vRenderer.setSize(w, h);
+  }
+  vResize();
+  window.addEventListener('resize', vResize);
+
+  vRenderer.domElement.addEventListener('pointermove', onVoxelPointerMove);
+  vRenderer.domElement.addEventListener('pointerdown', onVoxelPointerDown);
+  vRenderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+}
+
+function getVoxelHits(clientX, clientY) {
+  if (!vRenderer || !vScene || !vCamera) return [];
+  const rect = vRenderer.domElement.getBoundingClientRect();
+  vPointer.x = ((clientX - rect.left) / rect.width)  * 2 - 1;
+  vPointer.y = -((clientY - rect.top)  / rect.height) * 2 + 1;
+  vRaycaster.setFromCamera(vPointer, vCamera);
+  return vRaycaster.intersectObjects(vScene.children, true);
+}
+
+function resolveVoxelCell(clientX, clientY, removeMode) {
+  const hits = getVoxelHits(clientX, clientY);
+  const voxHit   = hits.find(h => h.object.userData?.isVoxel);
+  const floorHit = hits.find(h => h.object.userData?.isEditorFloor);
+  if (voxHit) {
+    const p = voxHit.object.position;
+    if (removeMode) return { x: Math.round(p.x), y: Math.round(p.y), z: Math.round(p.z), remove: true };
+    const n = voxHit.face.normal.clone().round();
+    return { x: Math.round(p.x + n.x), y: Math.round(p.y + n.y), z: Math.round(p.z + n.z), remove: false };
+  }
+  if (floorHit && !removeMode) {
+    return { x: Math.round(floorHit.point.x), y: 0, z: Math.round(floorHit.point.z), remove: false };
+  }
+  return null;
+}
+
+function onVoxelPointerMove(ev) {
+  if (vEditorOrbit || !vGhost) return;
+  const cell = resolveVoxelCell(ev.clientX, ev.clientY, false);
+  if (cell && cell.x >= 0 && cell.x < VOXEL_GRID && cell.y >= 0 && cell.y < VOXEL_GRID && cell.z >= 0 && cell.z < VOXEL_GRID) {
+    vGhost.visible = true;
+    vGhost.position.set(cell.x, cell.y, cell.z);
+    vGhost.material.color.set(voxelCurrentColor);
+  } else {
+    vGhost.visible = false;
+  }
+}
+
+function onVoxelPointerDown(ev) {
+  if (vEditorOrbit) return;
+  ev.preventDefault();
+  const removeMode = ev.button === 2;
+  const cell = resolveVoxelCell(ev.clientX, ev.clientY, removeMode);
+  if (!cell) return;
+  const { x, y, z } = cell;
+  if (x < 0 || x >= VOXEL_GRID || y < 0 || y >= VOXEL_GRID || z < 0 || z >= VOXEL_GRID) return;
+
+  voxelHistory.push(new Map(voxelMap));
+  if (voxelHistory.length > 60) voxelHistory.shift();
+
+  if (removeMode || cell.remove) voxelMap.delete(`${x},${y},${z}`);
+  else                           voxelMap.set(`${x},${y},${z}`, voxelCurrentColor);
+  rebuildVoxelEditorScene();
+}
+
+/* ── 팔레트 ─────────────────────────────────────────────── */
+function setupVoxelPalette() {
+  const container = document.getElementById('voxelPalette');
+  if (!container) return;
+  container.innerHTML = '';
+  PALETTE_COLORS.forEach((color) => {
+    const sw = document.createElement('button');
+    sw.className = 'voxel-swatch' + (color === voxelCurrentColor ? ' active' : '');
+    sw.style.background = color;
+    sw.title = color;
+    sw.addEventListener('click', () => {
+      voxelCurrentColor = color;
+      container.querySelectorAll('.voxel-swatch').forEach(s => s.classList.remove('active'));
+      sw.classList.add('active');
+      const picker = document.getElementById('voxelCustomColor');
+      if (picker) picker.value = color;
+    });
+    container.appendChild(sw);
+  });
+}
+
+/* ── 미리보기 캔버스 (2D 등각) ──────────────────────────── */
+function drawVoxelPreview(canvas, voxels) {
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, 48, 48);
+  ctx.fillStyle = '#2a2630';
+  ctx.fillRect(0, 0, 48, 48);
+  if (!voxels.length) return;
+  let mx = 0, my = 0, mz = 0;
+  voxels.forEach(v => { mx = Math.max(mx, v.x); my = Math.max(my, v.y); mz = Math.max(mz, v.z); });
+  const sc = 12 / Math.max(1, mx, my, mz);
+  const sorted = [...voxels].sort((a, b) => (a.x + a.z) - (b.x + b.z));
+  sorted.forEach(v => {
+    const px = 24 + (v.x - v.z) * 2.5 * sc;
+    const py = 32 - v.y * 3.5 * sc + (v.x + v.z) * 1.2 * sc;
+    const s = Math.max(2, 3 * sc);
+    ctx.fillStyle = v.color;
+    ctx.fillRect(px - s / 2, py - s / 2, s, s);
+  });
+}
+
+/* ── 복셀 라이브러리 렌더 ───────────────────────────────── */
+function renderVoxelLibrary() {
+  const container = document.getElementById('voxelLibraryList');
+  if (!container) return;
+  container.innerHTML = '';
+  const lib = loadVoxelLib();
+  if (!lib.length) {
+    const p = document.createElement('p');
+    p.style.cssText = 'font-size:.82rem;opacity:.6;margin:.3rem 0;';
+    p.textContent = '아직 만든 오브젝트가 없어요. 위 버튼으로 시작하세요!';
+    container.appendChild(p);
+    return;
+  }
+  lib.forEach((item) => {
+    const card = document.createElement('div');
+    card.className = 'voxel-lib-card';
+
+    const previewWrap = document.createElement('div');
+    previewWrap.className = 'voxel-lib-preview';
+    const pc = document.createElement('canvas');
+    pc.width = 48; pc.height = 48;
+    previewWrap.appendChild(pc);
+    drawVoxelPreview(pc, item.voxels || []);
+
+    const meta = document.createElement('div');
+    meta.className = 'voxel-lib-meta';
+    meta.innerHTML = `<div class="name">${item.name || '이름없음'}</div>
+      <div class="price">💰 ${(item.price || 0).toLocaleString()}</div>
+      <div class="cnt">${(item.voxels || []).length}개 복셀</div>`;
+
+    const actions = document.createElement('div');
+    actions.className = 'voxel-lib-actions';
+
+    const btnPlace = document.createElement('button');
+    btnPlace.className = 'btn-lib-place'; btnPlace.textContent = '배치';
+    btnPlace.addEventListener('click', () => {
+      selectedCatalogId = `voxel:${item.id}`;
+      selectedPlaceId = null; selectedFloorCell = null;
+      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'inv'));
+      shopPanel.classList.add('hidden');
+      invPanel.classList.remove('hidden');
+      createPanel.classList.add('hidden');
+      renderInventory(); updatePlaceHint(); highlightSelection();
+    });
+
+    const btnEdit = document.createElement('button');
+    btnEdit.className = 'btn-lib-edit'; btnEdit.textContent = '수정';
+    btnEdit.addEventListener('click', () => openVoxelEditor(item.id));
+
+    const btnDel = document.createElement('button');
+    btnDel.className = 'btn-lib-del'; btnDel.textContent = '삭제';
+    btnDel.addEventListener('click', () => {
+      if (!confirm(`「${item.name}」을 삭제하시겠습니까?`)) return;
+      saveVoxelLib(loadVoxelLib().filter(v => v.id !== item.id));
+      saveVoxelPlaced(loadVoxelPlaced().filter(p => p.libId !== item.id));
+      syncSceneFromData(); renderVoxelLibrary(); renderInventory();
+    });
+
+    actions.appendChild(btnPlace);
+    actions.appendChild(btnEdit);
+    actions.appendChild(btnDel);
+    card.appendChild(previewWrap); card.appendChild(meta); card.appendChild(actions);
+    container.appendChild(card);
+  });
+}
+
+/* ── 에디터 열기 / 닫기 ─────────────────────────────────── */
+function openVoxelEditor(libId = null) {
+  voxelEditorOpen   = true;
+  voxelEditingLibId = libId;
+  voxelHistory      = [];
+  vEditorOrbit      = false;
+  if (vControls) vControls.enabled = false;
+  const ob = document.getElementById('btnVoxelOrbit');
+  if (ob) { ob.textContent = '시점 조작 켜기'; ob.setAttribute('aria-pressed', 'false'); }
+
+  document.getElementById('voxelEditorModal').classList.remove('hidden');
+
+  if (libId) {
+    const item = loadVoxelLib().find(v => v.id === libId);
+    voxelMap = item ? arrayToVoxelMap(item.voxels || []) : new Map();
+    document.getElementById('voxelName').value  = item?.name  || '';
+    document.getElementById('voxelPrice').value = item?.price || 100;
+  } else {
+    voxelMap = new Map();
+    document.getElementById('voxelName').value  = '';
+    document.getElementById('voxelPrice').value = 100;
+  }
+
+  initVoxelEditorThree();
+  rebuildVoxelEditorScene();
+  setupVoxelPalette();
+
+  // Force resize after layout (modal was hidden so clientWidth was 0)
+  requestAnimationFrame(() => {
+    const wrap = document.getElementById('voxelCanvasWrap');
+    if (wrap && vRenderer && vCamera) {
+      const w = wrap.clientWidth, h = wrap.clientHeight;
+      if (w > 0 && h > 0) {
+        vCamera.aspect = w / h;
+        vCamera.updateProjectionMatrix();
+        vRenderer.setSize(w, h);
+      }
+    }
+  });
+
+  // animation loop
+  (function vLoop() {
+    if (!voxelEditorOpen) return;
+    requestAnimationFrame(vLoop);
+    if (vEditorOrbit && vControls) vControls.update();
+    if (vRenderer && vScene && vCamera) vRenderer.render(vScene, vCamera);
+  })();
+}
+
+function closeVoxelEditor() {
+  voxelEditorOpen = false;
+  document.getElementById('voxelEditorModal').classList.add('hidden');
+  if (vGhost) vGhost.visible = false;
+}
+
+/* ── 에디터 버튼 이벤트 ─────────────────────────────────── */
+document.getElementById('btnNewVoxel').addEventListener('click', () => openVoxelEditor(null));
+document.getElementById('btnVoxelClose').addEventListener('click', closeVoxelEditor);
+
+document.getElementById('btnVoxelOrbit').addEventListener('click', () => {
+  vEditorOrbit = !vEditorOrbit;
+  if (vControls) vControls.enabled = vEditorOrbit;
+  const btn = document.getElementById('btnVoxelOrbit');
+  btn.textContent = vEditorOrbit ? '시점 조작 끄기' : '시점 조작 켜기';
+  btn.setAttribute('aria-pressed', vEditorOrbit ? 'true' : 'false');
+  if (vGhost) vGhost.visible = false;
+});
+
+document.getElementById('btnVoxelUndo').addEventListener('click', () => {
+  if (!voxelHistory.length) return;
+  voxelMap = voxelHistory.pop();
+  rebuildVoxelEditorScene();
+});
+
+document.getElementById('btnVoxelClear').addEventListener('click', () => {
+  if (!confirm('모든 복셀을 초기화하겠습니까?')) return;
+  voxelHistory.push(new Map(voxelMap));
+  voxelMap = new Map();
+  rebuildVoxelEditorScene();
+});
+
+document.getElementById('voxelCustomColor').addEventListener('input', (e) => {
+  voxelCurrentColor = e.target.value;
+  document.querySelectorAll('.voxel-swatch').forEach(s => s.classList.remove('active'));
+});
+
+document.getElementById('btnVoxelSave').addEventListener('click', () => {
+  const name  = document.getElementById('voxelName').value.trim();
+  const price = Math.max(1, Math.min(9999, parseInt(document.getElementById('voxelPrice').value) || 100));
+  if (!name) { alert('이름을 입력해 주세요.'); return; }
+  if (!voxelMap.size) { alert('복셀을 하나 이상 추가해 주세요.'); return; }
+
+  const lib = loadVoxelLib();
+  if (voxelEditingLibId) {
+    const idx = lib.findIndex(v => v.id === voxelEditingLibId);
+    if (idx >= 0) lib[idx] = { ...lib[idx], name, price, voxels: voxelMapToArray(voxelMap) };
+    else lib.push({ id: voxelEditingLibId, name, price, voxels: voxelMapToArray(voxelMap) });
+  } else {
+    lib.push({ id: `vl_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, name, price, voxels: voxelMapToArray(voxelMap) });
+  }
+  saveVoxelLib(lib);
+  closeVoxelEditor();
+  renderVoxelLibrary();
+  renderInventory();
+  // switch to create tab
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'create'));
+  shopPanel.classList.add('hidden'); invPanel.classList.add('hidden'); createPanel.classList.remove('hidden');
+  renderVoxelLibrary();
+});
+
 /* ── 탭 전환 ─────────────────────────────────────────────── */
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
@@ -1083,6 +1582,8 @@ document.querySelectorAll('.tab').forEach(tab => {
     document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
     shopPanel.classList.toggle('hidden', id !== 'shop');
     invPanel.classList.toggle('hidden', id !== 'inv');
+    createPanel.classList.toggle('hidden', id !== 'create');
+    if (id === 'create') renderVoxelLibrary();
   });
 });
 

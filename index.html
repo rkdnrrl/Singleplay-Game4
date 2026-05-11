@@ -48,6 +48,7 @@
         <div class="tabs">
           <button type="button" class="tab active" data-tab="shop">상점</button>
           <button type="button" class="tab" data-tab="inv">내 가구</button>
+          <button type="button" class="tab" data-tab="create">🎨 제작</button>
         </div>
         <div id="shopPanel" class="tab-panel">
           <h3 class="panel-title">가구 구매</h3>
@@ -56,6 +57,11 @@
         <div id="invPanel" class="tab-panel hidden">
           <h3 class="panel-title">보유 가구 — 선택 후 바닥 클릭</h3>
           <div id="invList" class="inv-list"></div>
+        </div>
+        <div id="createPanel" class="tab-panel hidden">
+          <h3 class="panel-title">내 복셀 작품</h3>
+          <button id="btnNewVoxel" class="btn-new-voxel">+ 새 오브젝트 만들기</button>
+          <div id="voxelLibraryList" class="voxel-library"></div>
         </div>
       </aside>
     </div>
@@ -68,6 +74,44 @@
     }
   }
   </script>
+  <!-- 복셀 에디터 모달 -->
+  <div id="voxelEditorModal" class="voxel-modal hidden">
+    <div class="voxel-modal-content">
+      <div class="voxel-modal-header">
+        <h2>🎨 복셀 오브젝트 만들기</h2>
+        <button id="btnVoxelClose" class="btn-voxel-close">✕ 닫기</button>
+      </div>
+      <div class="voxel-modal-body">
+        <div class="voxel-canvas-wrap" id="voxelCanvasWrap">
+          <div class="voxel-canvas-controls">
+            <button id="btnVoxelOrbit" class="btn-orbit" aria-pressed="false">시점 조작 켜기</button>
+            <p class="voxel-canvas-hint">좌클릭: 복셀 추가 · 우클릭: 제거</p>
+          </div>
+        </div>
+        <div class="voxel-sidebar">
+          <div class="voxel-section">
+            <div class="voxel-section-title">🎨 색상</div>
+            <div id="voxelPalette" class="voxel-palette"></div>
+            <input type="color" id="voxelCustomColor" class="voxel-custom-color" value="#ff6b6b" title="직접 선택" />
+          </div>
+          <div class="voxel-section">
+            <div class="voxel-section-title">📛 이름 <small id="voxelCountText">(0개)</small></div>
+            <input id="voxelName" type="text" class="voxel-input" placeholder="예: 우주 소파" maxlength="20" />
+          </div>
+          <div class="voxel-section">
+            <div class="voxel-section-title">💰 판매 가격 (코인)</div>
+            <input id="voxelPrice" type="number" class="voxel-input" min="1" max="9999" value="100" />
+          </div>
+          <div class="voxel-btn-row">
+            <button id="btnVoxelUndo" class="btn-voxel-sec">↩ 되돌리기</button>
+            <button id="btnVoxelClear" class="btn-voxel-danger">🗑 초기화</button>
+          </div>
+          <button id="btnVoxelSave" class="btn-voxel-primary">💾 저장하기</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="config.js"></script>
   <script type="module" src="game.js"></script>
 </body>
